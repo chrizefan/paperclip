@@ -529,7 +529,7 @@ export class CodexAppServerDriver implements HarnessDriver {
           if (terminalIds.has(text(turn.id))) lastKnownTerminalIndex = index;
         });
         if (nativeRestartInterruptedTurnId({
-          ...snapshot, semanticResult: snapshot.semanticResult?.result ?? null,
+          ...snapshot, semanticResult: null,
         }) && (!providerHistoryIsArray || lastKnownTerminalIndex < 0)) {
           await cancellation.wait(cancellation.close());
           return { recovered: false, reason: "restart interruption history is incomplete" };
