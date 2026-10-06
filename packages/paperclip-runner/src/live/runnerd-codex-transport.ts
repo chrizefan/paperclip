@@ -3583,9 +3583,11 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       } else {
         if (!turns.some(turn => turn.id === params.turnId)) throw new Error("codex_history_unavailable: requested turn is outside the retained runner event window");
         const items = new Map<string, Record<string, unknown>>();
+        let semanticResultItem: Record<string, unknown> | null = null;
         let observedTurn = "";
         let observedStart = false;
         for (const event of this.#core?.store.state.committedEvents ?? []) {
+          if (event.envelope.runId !== this.#core?.store.state.identity.runId) continue;
           const payload = record(record(event.envelope.payload).payload);
           if (event.eventType === "turn.started") observedTurn = String(payload.providerTurnId ?? payload.turnId ?? record(payload.turn).id ?? "");
           if (event.eventType === "turn.started" && observedTurn === params.turnId) observedStart = true;
@@ -3594,7 +3596,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
             // runner's authoritative result with the exact retained turn,
             // rather than launching work again just to obtain a disposition.
             const id = `runner-result-${event.sourceSeq}`;
-            items.set(id, { turnId: observedTurn, item: { id, type: "agentMessage", text: JSON.stringify(payload) } });
+            semanticResultItem = { turnId: observedTurn, item: { id, type: "agentMessage", text: JSON.stringify(payload) } };
           }
           if (event.eventType !== "item.completed" || observedTurn !== params.turnId) continue;
           const item = record(rehydrateRunnerdItemNotification(payload, this.#threadId, observedTurn).item);
@@ -3602,6 +3604,8 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
         }
         if (!observedStart) throw new Error("codex_history_incomplete: requested turn start is outside the retained runner event window");
         data = [...items.values()];
+        // Runner authority wins over schema-shaped prose in an assistant item.
+        if (semanticResultItem) data.push(semanticResultItem);
       }
       if (params.sortDirection === "desc") data.reverse();
       const offset = params.cursor == null ? 0 : Number(params.cursor);
