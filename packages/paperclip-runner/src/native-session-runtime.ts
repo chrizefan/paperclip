@@ -869,7 +869,7 @@ async function consumeTurn(
     requestId: string;
   },
   initialGoal?: HarnessThreadGoal | null,
-  resumeInterruptedTurn?: (event: PrpEvent) => Promise<boolean>,
+  resumeInterruptedTurn?: (event: PrpEvent, signal: AbortSignal) => Promise<boolean>,
 ) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const appendAbort = new AbortController();
@@ -1180,7 +1180,7 @@ async function consumeTurn(
       if (isTurnTerminal(event)) {
         if (providerFailure) throw providerFailure;
         if (semanticResultProposal === null && governedResult === null &&
-            inputTimers.size === 0 && await resumeInterruptedTurn?.(event)) continue;
+            inputTimers.size === 0 && await resumeInterruptedTurn?.(event, appendAbort.signal)) continue;
         return {
           event,
           eventCount,
@@ -2188,20 +2188,22 @@ export async function executeNativeSession(
       requestedCollaborationMode: "executionMode" in input ? input.executionMode : "default" as const,
     });
     let restartContinuationStarted = false;
-    const resumeInterruptedTurn = async (event: PrpEvent) => {
+    const resumeInterruptedTurn = async (event: PrpEvent, signal: AbortSignal) => {
       if (restartContinuationStarted || !recovered || !options.resumeInterruptedTurn ||
           input.provider.kind !== "codex" || options.sessionGoalControl || options.resumeSessionGoalHeartbeat ||
           recoveredSnapshot.goal || persistedSession?.semanticResult || persistedSession?.pendingRuntimeRequests?.length ||
           event.eventType !== "turn.failed" || !isNativeRestartInterruption(event.payload.error) ||
           event.turnId !== persistedSession?.activeTurnId) return false;
       const snapshot = await session.snapshot();
+      signal.throwIfAborted();
       if (nativeRestartInterruptedTurnId(snapshot) !== event.turnId || snapshot.pendingRuntimeRequests?.length) return false;
       restartContinuationStarted = true;
       // Persist the old terminal before launching. Recovery inspects provider
       // history to adopt an accepted continuation if its checkpoint was lost.
-      await persistCheckpoint(snapshot);
+      await persistCheckpoint(snapshot, signal);
+      signal.throwIfAborted();
       await session.startTurn(restartContinuation());
-      await checkpoint();
+      await checkpoint(signal);
       return true;
     };
     const recoveredActiveTurnId = recovered

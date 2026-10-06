@@ -3581,7 +3581,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       if (method === "thread/turns/list") {
         data = turns.map(turn => ({ ...turn, items: [], itemsView: "notLoaded" }));
       } else {
-        if (params.turnId !== this.#turnId) throw new Error("codex_history_unavailable: requested turn is outside the retained runner event window");
+        if (!turns.some(turn => turn.id === params.turnId)) throw new Error("codex_history_unavailable: requested turn is outside the retained runner event window");
         const items = new Map<string, Record<string, unknown>>();
         let observedTurn = "";
         let observedStart = false;
@@ -3589,6 +3589,13 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           const payload = record(record(event.envelope.payload).payload);
           if (event.eventType === "turn.started") observedTurn = String(payload.providerTurnId ?? payload.turnId ?? record(payload.turn).id ?? "");
           if (event.eventType === "turn.started" && observedTurn === params.turnId) observedStart = true;
+          if (event.eventType === "run.result.proposed" && observedTurn === params.turnId) {
+            // Reconciliation can precede notification delivery. Recover the
+            // runner's authoritative result with the exact retained turn,
+            // rather than launching work again just to obtain a disposition.
+            const id = `runner-result-${event.sourceSeq}`;
+            items.set(id, { turnId: observedTurn, item: { id, type: "agentMessage", text: JSON.stringify(payload) } });
+          }
           if (event.eventType !== "item.completed" || observedTurn !== params.turnId) continue;
           const item = record(rehydrateRunnerdItemNotification(payload, this.#threadId, observedTurn).item);
           if (typeof item.id === "string") items.set(item.id, { turnId: observedTurn, item });
@@ -3672,6 +3679,24 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           });
         }
       }
+      // A controller can lose the checkpoint after a continuation is accepted.
+      // Keep its prior terminal as the history anchor, so driver recovery can
+      // adopt the later accepted turn instead of submitting it again. Items
+      // remain lazy and fail closed if their start left the retained window.
+      const priorTerminals = new Map<string, Record<string, unknown>>();
+      for (const event of this.#core?.store.state.committedEvents ?? []) {
+        if (event.envelope.runId !== this.#core?.store.state.identity.runId ||
+            !["turn.completed", "turn.failed", "turn.interrupted", "turn.cancelled"].includes(event.eventType)) continue;
+        const payload = record(record(event.envelope.payload).payload);
+        const turnId = payload.providerTurnId ?? payload.turnId ?? record(payload.turn).id;
+        if (typeof turnId !== "string" || !turnId || turnId === this.#turnId) continue;
+        priorTerminals.set(turnId, {
+          id: turnId,
+          status: event.eventType.slice("turn.".length),
+          error: payload.error ?? record(payload.turn).error ?? null,
+        });
+      }
+      recoveredTurns.unshift(...priorTerminals.values());
       this.#recoveryTurnBindingPending = false;
       this.#pumpEvents();
       return {

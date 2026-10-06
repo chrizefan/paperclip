@@ -9,7 +9,7 @@ import type { PrpEvent } from "../protocol/replay-contract.js";
 import { executeNativeSession } from "../native-session-runtime.js";
 import { createRunnerdCodexTransport, defaultCapabilityRunnerdBinary } from "./runnerd-codex-transport.js";
 
-it.each([false, true])("completes after the real runner and provider are killed (crash before continuation: %s)", async (crashBeforeContinuation) => {
+it.each(["none", "before-start", "after-start"] as const)("completes after the real runner and provider are killed (second crash: %s)", async (crash) => {
   const root = await mkdtemp(join(tmpdir(), "runner-restart-continuation-"));
   const identity = { runId: "run-restart", sessionId: "session-restart", companyId: "company-restart", issueId: "issue-restart", agentId: "agent-restart" };
   const execution: NativeExecutionInputV1 = {
@@ -69,7 +69,7 @@ it.each([false, true])("completes after the real runner and provider are killed 
     const events: PrpEvent[] = [];
     const checkpoints: PersistedNativeSession[] = [];
     let recoveryCheckpoint = persisted;
-    let failCheckpoint = crashBeforeContinuation;
+    let failCheckpoint = crash !== "none";
     const interruptedController = new Error("controller lost before continuation submission");
     const execute = () => executeNativeSession({
       input: execution, backend: recovering, persistedSession: recoveryCheckpoint, resumeInterruptedTurn: true,
@@ -77,10 +77,14 @@ it.each([false, true])("completes after the real runner and provider are killed 
       controlPlane: {
         async openRun() {},
         async checkpointSession(snapshot) {
-          checkpoints.push(structuredClone(snapshot));
-          if (failCheckpoint && snapshot.terminal?.runTerminalState === "failed") {
+          if (failCheckpoint && crash === "after-start" && snapshot.dispositionOnlyRecoveryTurnId === "provider-turn-2") {
             failCheckpoint = false;
-            recoveryCheckpoint = structuredClone(snapshot);
+            throw interruptedController;
+          }
+          checkpoints.push(structuredClone(snapshot));
+          recoveryCheckpoint = structuredClone(snapshot);
+          if (failCheckpoint && crash === "before-start" && snapshot.terminal?.runTerminalState === "failed") {
+            failCheckpoint = false;
             throw interruptedController;
           }
         },
@@ -92,7 +96,7 @@ it.each([false, true])("completes after the real runner and provider are killed 
         async completeRun() {},
       },
     });
-    if (crashBeforeContinuation) {
+    if (crash !== "none") {
       await expect(execute()).rejects.toBe(interruptedController);
       await restored.transport.close().catch(() => undefined);
       restored = createRunnerdCodexTransport({ ...options, resumeDynamicTools: [], resumeActiveTurnId: recoveryCheckpoint.activeTurnId });
@@ -102,9 +106,12 @@ it.each([false, true])("completes after the real runner and provider are killed 
     expect(completion).toMatchObject({ providerSessionId: persisted.providerSessionId, turnId: "provider-turn-2", terminal: { runTerminalState: "succeeded" } });
     expect(events.filter(event => event.eventType === "turn.failed")).toHaveLength(1);
     expect(events.filter(event => event.eventType === "run.terminal")).toHaveLength(1);
-    expect(checkpoints.some(snapshot => snapshot.activeTurnId === "provider-turn-2" && snapshot.terminal === null)).toBe(true);
+    if (crash !== "after-start") expect(checkpoints.some(snapshot => snapshot.activeTurnId === "provider-turn-2" && snapshot.terminal === null)).toBe(true);
     expect((await readFile(join(root, "calls.log"), "utf8")).match(/^turn\/start$/gm)).toHaveLength(2);
-    expect(events.find(event => event.eventType === "turn.submitted")?.payload.text).toContain("Reconcile any unfinished tool or command");
+    const journal = JSON.parse(await readFile(join(root, "control-plane/control-plane-state.json"), "utf8"));
+    const submissions = journal.commands.filter((command: { type: string }) => command.type === "turn.start");
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1].payload.text).toContain("Reconcile any unfinished tool or command");
   } finally {
     await restored?.transport.close().catch(() => undefined);
     for (const bundle of [first, restored]) {
