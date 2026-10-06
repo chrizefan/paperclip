@@ -35,7 +35,6 @@ import {
   validatePrpEvent,
   type PrpEvent,
 } from "../protocol/replay-contract.js";
-import { digestPaperclipSemanticContent } from "../semantic-tools/receipts.js";
 import {
   type DurableRecoveryCommittedEvent,
   type DurableRecoveryCoreCommand,
@@ -3142,7 +3141,9 @@ export class DurablePrpControlPlane {
       isSemanticInput &&
       semantic !== undefined &&
       (semantic.content as Record<string, unknown>).digest !==
-        digestPaperclipSemanticContent(semantic.input)
+        // The runner hashes the exact transmitted input. Receipt redaction is
+        // deliberately separate: it can erase differences in protected fields.
+        `sha256:${canonicalDigest(semantic.input)}`
     ) {
       // Only the authenticated, schema-valid, exactly correlated input may
       // permanently fail its owner. Never commit, dispatch, or ACK these bytes.
