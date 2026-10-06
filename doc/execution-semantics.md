@@ -1000,6 +1000,19 @@ recording the proof and successor lineage. Retained provider files are not edite
 
 Bootstrap retries, exact-checkpoint resumes, and fresh replacement sessions share three total provider attempts, including the original attempt. Linked run IDs, controller restarts, and duplicate wakes do not reset this budget. Automatic attempts retain the 30-second delay. Replacement scheduling and predecessor lineage commit together, with one successor per predecessor and admission through the normal task locks, authorization, pause, approval, and budget gates.
 
+An exact local Codex restart can restore the conversation after losing its active
+turn. Runnerd records this as `provider_turn_lost_on_restore`, with no invented
+task result. The admitted restart attempt may send one continuation in that same
+conversation. It preserves the workspace and asks the agent to reconcile unfinished
+commands and external actions before proceeding. It does not resend the task or
+tool calls. An outcome that cannot be reconciled remains a blocker. The continuation
+uses the existing durable one-shot recovery marker; recovery adopts an accepted
+turn if the controller dies before checkpointing its ID. The interrupted terminal
+is checkpointed before submission. Real provider failures, accepted semantic
+results, intentional stops, and historical unmarked failures keep their existing
+terminal behavior. This continuation uses the already charged restart attempt and
+does not reset the provider-attempt budget.
+
 Provider execution and control-plane finalization have different clocks. A healthy provider can think or execute a long tool without output. Once execution settles, recovery and finalization control steps have a 60-second deadline, checked on startup and every 15 seconds. With a healthy database and scheduler, an abandoned transition must be repaired or surfaced within 90 seconds. Terminal persistence must not wait on provider cleanup or publication; a late finalizer cannot change a reassigned or closed task or release another run's locks. Historical ambiguous runs are never automatically replayed after an upgrade.
 
 Every continuation carries the triggering request, ordered user direction, interaction outcomes, completed work, and explicit history coverage. A delivered message remains part of the task's request after its connection or approval resolves. The original title is background; a completed Notion read does not satisfy a later Gmail request. Author and source-trust boundaries survive rendering into both native and legacy prompts. Missing required history must be fetched before dispatch rather than described as complete.

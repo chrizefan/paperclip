@@ -3655,8 +3655,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
           await new Promise((resolveWait) => setTimeout(resolveWait, 10));
         }
         if (terminal !== undefined) {
+          const payload = record(record(terminal.envelope.payload).payload);
           recoveredTurns.push({
             id: this.#turnId,
+            // Reconciliation must retain the cause, including the runner's
+            // explicit process-loss marker, rather than inventing error:null.
+            error: payload.error ?? record(payload.turn).error ?? null,
             status:
               terminal.eventType === "turn.completed"
                 ? "completed"
