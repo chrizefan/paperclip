@@ -1772,6 +1772,13 @@ describe.sequential("DurablePrpControlPlane", () => {
           for (let depth = 0; depth < 65; depth += 1) nested = { child: nested };
           semantic.input = nested;
         }
+        if (fault === "over_node_limit" || fault === "over_depth_limit") {
+          // Each fixture object has one key, so JSON.stringify is canonical.
+          // Hash independently of the bounded helper: the limits themselves
+          // must reject even a matching raw digest and keep the permanent fence.
+          semantic.content.digest = `sha256:${createHash("sha256")
+            .update(JSON.stringify(semantic.input)).digest("hex")}`;
+        }
         sendSecure(client, event);
         await expect(receiveSecure(client)).resolves.toBeNull();
         expect(onProtocolIntegrityError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
