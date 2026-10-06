@@ -6299,7 +6299,12 @@ describe("executeNativeSession recovery", () => {
     expect(openRun).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("replaces a provider session that already ended with a failed terminal (prepared: %s)", async (preparedMode) => {
+  it.each([
+    { preparedMode: false, interrupted: false },
+    { preparedMode: true, interrupted: false },
+    { preparedMode: false, interrupted: true },
+    { preparedMode: true, interrupted: true },
+  ])("replaces a failed provider with full task context (prepared: $preparedMode, interrupted: $interrupted)", async ({ preparedMode, interrupted }) => {
     const digest = "0".repeat(64);
     const skill = {
       key: "company/recovery-skill",
@@ -6351,6 +6356,7 @@ describe("executeNativeSession recovery", () => {
         } as const;
     const checkpoint: PersistedNativeSession = {
       backendKind: "mock",
+      driverKind: "codex_app_server",
       sessionId: "driver-failed",
       identity,
       providerSessionId: "provider-failed",
@@ -6364,7 +6370,10 @@ describe("executeNativeSession recovery", () => {
         runTerminalState: "failed",
         reportedWorkDisposition: "yielded",
       },
-      terminalTurns: [{ turnId: "turn-failed", fingerprint: "failed" }],
+      terminalTurns: [{ turnId: "turn-failed", fingerprint: interrupted ? JSON.stringify({
+        terminalState: "failed", result: null,
+        error: { code: "provider_turn_lost_on_restore", recoverable: true },
+      }) : "failed" }],
       pendingRuntimeRequests: [],
       lineage: [],
     };
@@ -6400,8 +6409,8 @@ describe("executeNativeSession recovery", () => {
       async close() {},
     };
     const recoverSession = vi.fn(async () => ({
-      recovered: true as const,
-      session: replacementSession,
+      recovered: false as const,
+      reason: "provider thread is unavailable",
     }));
     const openReplacementSession = vi.fn(async () => replacementSession);
     const onContinuityBreak = vi.fn(async () => undefined);
@@ -6462,7 +6471,7 @@ describe("executeNativeSession recovery", () => {
     ).resolves.toMatchObject({ providerSessionId: "provider-replacement" });
 
     expect(getFreshSessionHandoff).toHaveBeenCalledOnce();
-    expect(recoverSession).not.toHaveBeenCalled();
+    expect(recoverSession).toHaveBeenCalledTimes(interrupted ? 1 : 0);
     expect(openReplacementSession).toHaveBeenCalledOnce();
     const replacementEnvelope = JSON.parse(
       startTurn.mock.calls[0]![0].message.text,
@@ -6484,7 +6493,7 @@ describe("executeNativeSession recovery", () => {
     expect(JSON.stringify(replacementEnvelope)).not.toContain("ONLY_NEW_COMMENT");
     expect(startTurn.mock.calls[0]![0]).not.toHaveProperty("continuation");
     expect(onContinuityBreak).toHaveBeenCalledWith({
-      reason: "provider session ended with a failed terminal",
+      reason: interrupted ? "provider thread is unavailable" : "provider session ended with a failed terminal",
       previousDriverSessionId: "driver-failed",
       previousProviderSessionId: "provider-failed",
       replacementDriverSessionId: "driver-replacement",

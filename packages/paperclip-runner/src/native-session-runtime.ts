@@ -2383,7 +2383,7 @@ export async function executeNativeSession(
             await session.goal({ action: "get", requestId });
           }
           await checkpoint();
-        } else if (shouldStartFreshTurn && checkpointedInterruption) {
+        } else if (shouldStartFreshTurn && recovered && checkpointedInterruption) {
           restartContinuationStarted = true;
           await session.startTurn(restartContinuation());
           await checkpoint();
