@@ -224,6 +224,60 @@ const publicRoutineWebhookPath = /^\/api\/routine-triggers\/public\/[a-f0-9]{24}
 
 const publicMcpGatewayProtocolPath = /^\/mcp\/gateways\/gw_[a-f0-9]{32}\/?$/i;
 
+/**
+ * State-changing HTTP methods. Reads are intentionally left reachable without a
+ * credential: in `local_trusted` the loopback board cannot authenticate at all,
+ * so requiring a principal on GET would break every page load.
+ */
+const mutatingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function isMutatingMethod(method: string | undefined): boolean {
+  return mutatingMethods.has((method ?? "").toUpperCase());
+}
+
+/**
+ * True when the request declares an agent run.
+ *
+ * Presence of the header is the signal, not a non-empty value: the run marker is
+ * what tells us this writer is a machine acting inside a run, so a client that
+ * sends the header at all must present a credential that resolves to that run.
+ */
+function declaresAgentRun(req: Request): boolean {
+  return req.header("x-paperclip-run-id") !== undefined;
+}
+
+/**
+ * True for the board UI's own same-origin navigations — the one writer that is
+ * legitimately credential-less in `local_trusted`.
+ *
+ * Two signals are accepted, and deliberately no others:
+ *
+ * - `Origin`, when its host equals the `Host` the request actually reached. A
+ *   browser attaches `Origin` to every same-origin non-GET request, so this
+ *   covers the board. Comparing the host stops a foreign origin from riding in
+ *   on a forged header value.
+ * - `Sec-Fetch-*`, but only when `Origin` is absent. These are forbidden header
+ *   names in the Fetch standard: a browser sets them and page JavaScript cannot
+ *   forge them, so they survive when a browser omits `Origin`.
+ *
+ * `Referer` is intentionally ignored. It is missing often enough to be useless
+ * and trivial to forge, which is exactly how the origin guard in #7763 was
+ * bypassed. Relying on it here would reintroduce that bypass.
+ */
+function isBrowserBoardRequest(req: Request): boolean {
+  const origin = req.header("origin");
+  if (origin) {
+    const host = req.header("host");
+    if (!host) return false;
+    try {
+      return new URL(origin).host.toLowerCase() === host.toLowerCase();
+    } catch {
+      return false;
+    }
+  }
+  return req.header("sec-fetch-mode") !== undefined;
+}
+
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
   const boardAuth = boardAuthService(db);
   return async (req, _res, next) => {
@@ -265,6 +319,40 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     }
 
     if (!hasBearerCredentials) {
+      if (opts.deploymentMode === "local_trusted" && isMutatingMethod(req.method)) {
+        // The actor seeded above is the *human's* identity. Letting a
+        // credential-less write through would file it under `local-board`, so a
+        // writer that lost its credential, was never given one, or had it
+        // rejected upstream would not fail loudly — it would succeed and leave a
+        // record that reads back as if the human wrote it. Require a resolved
+        // principal for every write instead of defaulting one.
+        //
+        // The browser board in this mode holds no session and sends no
+        // Authorization header, so it cannot be gated on a credential. It is
+        // identified by being a same-origin browser navigation instead.
+        //
+        // See paperclipai/paperclip#8019 and #15027.
+        if (declaresAgentRun(req)) {
+          next(
+            unauthorized(
+              `Run ${req.header("x-paperclip-run-id")} presented no agent credentials. ` +
+                "Refusing to attribute this write to the board. Retry with a valid " +
+                "Authorization: Bearer credential for this run.",
+            ),
+          );
+          return;
+        }
+        if (!isBrowserBoardRequest(req)) {
+          next(
+            unauthorized(
+              "Unauthenticated write refused. local_trusted has no session to fall back on, " +
+                "and this request carries neither an agent credential nor the browser " +
+                "navigation headers of the board UI. Nothing was written.",
+            ),
+          );
+          return;
+        }
+      }
       if (opts.deploymentMode === "authenticated" && opts.resolveSession) {
         const cloudTenantActor = await resolveCloudTenantActor(db, req);
         if (cloudTenantActor) {
