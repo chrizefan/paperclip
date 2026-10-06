@@ -415,6 +415,18 @@ function canonicalDigest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
+function matchesSemanticInputDigest(input: unknown, digest: unknown): boolean {
+  try {
+    // Wire integrity covers the complete input, including protected fields.
+    // Receipt redaction can erase those differences and has a separate hash.
+    return digest === `sha256:${canonicalDigest(input)}`;
+  } catch {
+    // Canonicalization bounds must keep the same permanent integrity fence.
+    // Never attach an input-derived error or payload to the diagnostic.
+    return false;
+  }
+}
+
 function exactIdentity(value: unknown): value is DurableRecoveryIdentity {
   return (
     isRecord(value) &&
@@ -3140,10 +3152,10 @@ export class DurablePrpControlPlane {
     if (
       isSemanticInput &&
       semantic !== undefined &&
-      (semantic.content as Record<string, unknown>).digest !==
-        // The runner hashes the exact transmitted input. Receipt redaction is
-        // deliberately separate: it can erase differences in protected fields.
-        `sha256:${canonicalDigest(semantic.input)}`
+      !matchesSemanticInputDigest(
+        semantic.input,
+        (semantic.content as Record<string, unknown>).digest,
+      )
     ) {
       // Only the authenticated, schema-valid, exactly correlated input may
       // permanently fail its owner. Never commit, dispatch, or ACK these bytes.

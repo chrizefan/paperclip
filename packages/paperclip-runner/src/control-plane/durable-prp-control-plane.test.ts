@@ -1703,6 +1703,8 @@ describe.sequential("DurablePrpControlPlane", () => {
   ))(
     "accepts the Rust wire digest and preserves exact input: $eventType / $name",
     async ({ input, digest, eventType }) => {
+      // The JSON transport normalizes negative zero before the receiver sees it.
+      const wireInput = JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
       const root = mkdtempSync(resolve(tmpdir(), "paperclip-prp-raw-input-"));
       const onProtocolIntegrityError = vi.fn();
       const onSemanticToolInput = vi.fn(async () => ({ result: { ok: true } }));
@@ -1713,7 +1715,7 @@ describe.sequential("DurablePrpControlPlane", () => {
       try {
         await core.start();
         const client = (await authenticate(core, core.issueBootstrapTicket()))!;
-        const event = semanticInputEvent(1, input);
+        const event = semanticInputEvent(1, wireInput);
         (event.payload as any).eventType = eventType;
         const semantic = (event.payload as any).payload.semantic_tool;
         // This shared golden also runs against the Rust producer's hash.
@@ -1726,7 +1728,7 @@ describe.sequential("DurablePrpControlPlane", () => {
         }));
         const command = frames.find((frame) => frame?.kind === "command")!.payload as any;
         expect(command.payload.inputDigest).toBe(digest.slice("sha256:".length));
-        expect(onSemanticToolInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ input }));
+        expect(onSemanticToolInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ input: wireInput }));
         expect(core.store.state.committedEvents).toHaveLength(1);
         expect(core.store.state.committedEvents[0]?.envelope).toEqual(event);
         expect(onProtocolIntegrityError).not.toHaveBeenCalled();
@@ -1735,7 +1737,10 @@ describe.sequential("DurablePrpControlPlane", () => {
     },
   );
 
-  it.each(["redacted_digest", "protected_field_tampering", "forged_digest"] as const)(
+  it.each([
+    "redacted_digest", "protected_field_tampering", "forged_digest",
+    "over_node_limit", "over_depth_limit",
+  ] as const)(
     "rejects invalid raw semantic integrity without commit, dispatch or ACK: %s",
     async (fault) => {
       const root = mkdtempSync(resolve(tmpdir(), "paperclip-prp-raw-integrity-"));
@@ -1761,6 +1766,12 @@ describe.sequential("DurablePrpControlPlane", () => {
           // Redacted receipt hashes intentionally cannot prove byte integrity.
           expect(digestPaperclipSemanticContent(semantic.input)).toBe(redactedDigest);
         }
+        if (fault === "over_node_limit") semantic.input = { values: Array(10_001).fill(0) };
+        if (fault === "over_depth_limit") {
+          let nested: unknown = {};
+          for (let depth = 0; depth < 65; depth += 1) nested = { child: nested };
+          semantic.input = nested;
+        }
         sendSecure(client, event);
         await expect(receiveSecure(client)).resolves.toBeNull();
         expect(onProtocolIntegrityError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
@@ -1773,6 +1784,11 @@ describe.sequential("DurablePrpControlPlane", () => {
         expect(onSemanticToolInput).not.toHaveBeenCalled();
         expect(JSON.stringify(onProtocolIntegrityError.mock.calls)).not.toContain("fixture-before");
         expect(JSON.stringify(onProtocolIntegrityError.mock.calls)).not.toContain("fixture-after");
+        const replay = (await authenticate(core, client.leaseToken!))!;
+        sendSecure(replay, semanticInputEvent());
+        await expect(receiveSecure(replay)).resolves.toBeNull();
+        expect(onProtocolIntegrityError).toHaveBeenCalledTimes(1);
+        expect(onSemanticToolInput).not.toHaveBeenCalled();
       } finally { await core.stop(); rmSync(root, { recursive: true, force: true }); }
     },
   );
