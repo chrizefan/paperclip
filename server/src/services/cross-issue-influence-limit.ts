@@ -4,6 +4,7 @@ import { activityLog, heartbeatRuns } from "@paperclipai/db";
 import { isUuidLike, issueWriteDenialResponse } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { readRunSourceIssueId } from "./run-source-issue.js";
 
 export const CROSS_ISSUE_INFLUENCE_LIMIT = 20;
 export const CROSS_ISSUE_INFLUENCE_ENFORCE_AT = new Date("2026-08-11T00:00:00.000Z");
@@ -32,15 +33,6 @@ export function crossIssueInfluenceRunContextError() {
   // so the agent reading this 403 is told the fix, not just the refusal.
   const { body } = issueWriteDenialResponse("cross_issue_influence_run_context_required");
   return forbidden(body.error, body.details);
-}
-
-function readRunSourceIssueId(contextSnapshot: unknown) {
-  if (!contextSnapshot || typeof contextSnapshot !== "object" || Array.isArray(contextSnapshot)) return null;
-  const context = contextSnapshot as Record<string, unknown>;
-  for (const candidate of [context.issueId, context.taskId]) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-  }
-  return null;
 }
 
 export function evaluateCrossIssueInfluenceLimit(input: {
