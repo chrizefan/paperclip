@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { documentRevisions, documents, issueDocuments, issues } from "@paperclipai/db";
-import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
+import { isSystemIssueDocumentKey, isUuidLike, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { isUniqueViolation } from "../db-errors.js";
 import { insertRowsInChunks } from "./batch-insert.js";
@@ -15,6 +15,23 @@ function normalizeDocumentKey(key: string) {
     throw unprocessable("Invalid document key", parsed.error.issues);
   }
   return parsed.data;
+}
+
+/**
+ * Issue-scoped lookup predicate for an issue-document ref.
+ *
+ * A ref that is entirely a uuid is a document id (`documents.id` via the
+ * `issueDocuments.documentId` link), never a key: a write addressed by document
+ * id used to create a second document KEYED with that id, so a by-key lookup
+ * then resolved the shadow row instead of the document the caller meant. A uuid
+ * that is not a document id on this issue therefore must not resolve at all, so
+ * this never ORs the two columns. The issue scope holds either way.
+ */
+function documentRefCondition(issueId: string, ref: string) {
+  return and(
+    eq(issueDocuments.issueId, issueId),
+    isUuidLike(ref) ? eq(issueDocuments.documentId, ref) : eq(issueDocuments.key, ref),
+  );
 }
 
 function nextAvailableDocumentKey(sourceKey: string, existingKeys: string[]) {
@@ -164,7 +181,7 @@ export function documentService(db: Db) {
         .select(issueDocumentSelect)
         .from(issueDocuments)
         .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
-        .where(and(eq(issueDocuments.issueId, issueId), eq(issueDocuments.key, key)))
+        .where(documentRefCondition(issueId, key))
         .then((rows) => rows[0] ?? null);
       return row ? mapIssueDocumentRow(row, true) : null;
     },
@@ -190,7 +207,7 @@ export function documentService(db: Db) {
         .from(issueDocuments)
         .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
         .innerJoin(documentRevisions, eq(documentRevisions.documentId, documents.id))
-        .where(and(eq(issueDocuments.issueId, issueId), eq(issueDocuments.key, key)))
+        .where(documentRefCondition(issueId, key))
         .orderBy(desc(documentRevisions.revisionNumber));
     },
 
@@ -209,6 +226,15 @@ export function documentService(db: Db) {
       lockedDocumentStrategy?: "conflict" | "create_new_document";
     }) => {
       const key = normalizeDocumentKey(input.key);
+      // Reads resolve a uuid-shaped ref by documents.id; a write may not. Writing
+      // one would create a second document KEYED with that id, the exact shadow
+      // row that made reads ambiguous, so refuse before any insert happens.
+      if (isUuidLike(key)) {
+        throw conflict(
+          "Document key is a document id, not a key. Write a document by its key, or resolve the id to a key first.",
+          { key },
+        );
+      }
       const issue = await db
         .select({ id: issues.id, companyId: issues.companyId })
         .from(issues)
@@ -245,7 +271,7 @@ export function documentService(db: Db) {
             })
             .from(issueDocuments)
             .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
-            .where(and(eq(issueDocuments.issueId, issue.id), eq(issueDocuments.key, key)))
+            .where(documentRefCondition(issue.id, key))
             .then((rows) => rows[0] ?? null);
 
           if (existing) {
@@ -593,7 +619,7 @@ export function documentService(db: Db) {
           .select(issueDocumentSelect)
           .from(issueDocuments)
           .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
-          .where(and(eq(issueDocuments.issueId, input.issueId), eq(issueDocuments.key, key)))
+          .where(documentRefCondition(input.issueId, key))
           .then((rows) => rows[0] ?? null);
 
         if (!existing) throw notFound("Document not found");
@@ -693,7 +719,7 @@ export function documentService(db: Db) {
           .select(issueDocumentSelect)
           .from(issueDocuments)
           .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
-          .where(and(eq(issueDocuments.issueId, input.issueId), eq(issueDocuments.key, key)))
+          .where(documentRefCondition(input.issueId, key))
           .then((rows) => rows[0] ?? null);
 
         if (!existing) throw notFound("Document not found");
@@ -740,7 +766,7 @@ export function documentService(db: Db) {
           .select(issueDocumentSelect)
           .from(issueDocuments)
           .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
-          .where(and(eq(issueDocuments.issueId, issueId), eq(issueDocuments.key, key)))
+          .where(documentRefCondition(issueId, key))
           .then((rows) => rows[0] ?? null);
 
         if (!existing) throw notFound("Document not found");
@@ -787,7 +813,7 @@ export function documentService(db: Db) {
           .select(issueDocumentSelect)
           .from(issueDocuments)
           .innerJoin(documents, eq(issueDocuments.documentId, documents.id))
-          .where(and(eq(issueDocuments.issueId, issueId), eq(issueDocuments.key, key)))
+          .where(documentRefCondition(issueId, key))
           .then((rows) => rows[0] ?? null);
 
         if (!existing) return null;
