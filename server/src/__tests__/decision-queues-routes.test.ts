@@ -119,7 +119,7 @@ describeEmbeddedPostgres("decision queue routes", () => {
         kind: "interaction",
         id: interactionId,
         companyId,
-        title: "Waiting on Chris",
+        title: "Waiting on board approval",
         identifier: null,
         status: "pending",
         href: null,
@@ -423,7 +423,7 @@ describeEmbeddedPostgres("decision queue routes", () => {
       .toHaveLength(1);
   });
 
-  it("retires a seeded question when its interaction reaches a terminal state (DIG-2108)", async () => {
+  it("retires a seeded question when its interaction reaches a terminal state", async () => {
     const { companyId, issueId } = await seed();
     const terminal = ["answered", "expired", "cancelled", "accepted", "rejected", "failed"] as const;
     const ids = terminal.map(() => randomUUID());
@@ -484,7 +484,7 @@ describeEmbeddedPostgres("decision queue routes", () => {
     expect(retireEvents.length).toBe(terminal.length + 1);
   });
 
-  it("purges a seeded question whose source interaction no longer exists (DIG-2108)", async () => {
+  it("purges a seeded question whose source interaction no longer exists", async () => {
     const { companyId, issueId } = await seed();
     const goneId = randomUUID();
     const liveId = randomUUID();
@@ -516,7 +516,7 @@ describeEmbeddedPostgres("decision queue routes", () => {
       .then((rows) => rows.map((row) => row.sourceId))).toEqual([liveId]);
   });
 
-  it("keeps a hand-added question that the seed rules do not own (DIG-2108)", async () => {
+  it("keeps a hand-added question that the seed rules do not own", async () => {
     const { companyId, issueId } = await seed();
     const addedId = randomUUID();
     await db.insert(issueThreadInteractions).values({

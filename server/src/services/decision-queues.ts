@@ -366,7 +366,7 @@ const PENDING_INTERACTION_STATUSES = ["pending"] as const;
 
 /**
  * Removes seeded interaction rows whose interaction has left the pending set,
- * plus rows whose source interaction no longer exists at all (DIG-2108).
+ * plus rows whose source interaction no longer exists at all.
  *
  * Two guards keep this from eating live work:
  * - A source the current feed still reports is never retired, so re-running the
@@ -769,7 +769,7 @@ export function decisionQueueService(db: Db) {
       // Retire first, and on an empty feed too: a queue whose only member has
       // just been answered has to drain even when nothing else is waiting. The
       // feed only carries sources that are still open, so anything the seed
-      // rules own but the feed no longer reports has left the queue (DIG-2108).
+      // rules own but the feed no longer reports has left the queue.
       await retireSeededQueueItems(
         db,
         companyId,
