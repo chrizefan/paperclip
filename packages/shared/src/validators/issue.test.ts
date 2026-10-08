@@ -5,6 +5,7 @@ import {
   issueCommentMetadataSchema,
   createIssueSchema,
   issueBlockedInboxAttentionSchema,
+  issueDocumentKeySchema,
   resolveIssueRecoveryActionSchema,
   respondIssueThreadInteractionSchema,
   stalledReviewDecisionSchema,
@@ -638,5 +639,22 @@ describe("issue validators", () => {
     });
 
     expect(parsed.success).toBe(false);
+  });
+
+  describe("issueDocumentKeySchema", () => {
+    // The document routes validate the :key path parameter with this schema
+    // BEFORE the service resolves it, and the service resolves a uuid-shaped ref
+    // by documents.id. If this schema ever rejects a uuid, every read addressed by
+    // document id starts answering 400 and the orphans become unrepairable.
+    it("accepts a uuid-shaped ref so read routes can pass it to the id resolver", () => {
+      expect(issueDocumentKeySchema.safeParse("3f2504e0-4f89-41d3-9a0c-0305e82c3301").success).toBe(true);
+    });
+
+    it("accepts the keys the issue document routes already use", () => {
+      expect(issueDocumentKeySchema.safeParse("plan").success).toBe(true);
+      expect(issueDocumentKeySchema.safeParse("continuation-summary").success).toBe(true);
+      expect(issueDocumentKeySchema.safeParse("plan-2").success).toBe(true);
+      expect(issueDocumentKeySchema.safeParse("plan-3f2504e0-4f89-41d3-9a0c-0305e82c3301").success).toBe(true);
+    });
   });
 });
