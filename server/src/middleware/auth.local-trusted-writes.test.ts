@@ -4,13 +4,13 @@ import type { Db } from "@paperclipai/db";
 import { actorMiddleware } from "./auth.js";
 
 /**
- * DIG-1346 / paperclipai/paperclip#8019, #15027.
+ * paperclipai/paperclip#8019, #15027.
  *
  * In `local_trusted` the actor middleware seeds the *human's* identity on every
  * request before it looks at any credential. A credential-less write therefore
  * used to succeed and land in the database as `local-board`, so a writer that
- * lost its credential never failed loudly — it forged a record in Chris's voice
- * that came back in wakes as if he had written it.
+ * lost its credential never failed loudly — it forged a record in the board
+ * operator's voice that came back in wakes as if they had written it.
  *
  * These tests pin the guard: writes need a resolved principal, and the browser
  * board — which in this mode holds no session and sends no Authorization header —
