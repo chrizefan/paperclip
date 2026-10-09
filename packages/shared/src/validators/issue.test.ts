@@ -250,7 +250,9 @@ describe("issue validators", () => {
       createdByUserId: "spoofed-creator",
       responsibleUserId: "spoofed-responsible",
     });
-    const updated = updateIssueSchema.parse({
+    // Both attribution keys are `.omit()`ed from the update schema. So the
+    // update path must REFUSE them. It used to strip them silently instead.
+    const updated = updateIssueSchema.safeParse({
       title: "Do not update attribution",
       createdByUserId: "spoofed-creator",
       responsibleUserId: "spoofed-responsible",
@@ -258,8 +260,32 @@ describe("issue validators", () => {
 
     expect(created.createdByUserId).toBe("spoofed-creator");
     expect(created.responsibleUserId).toBe("spoofed-responsible");
-    expect(updated).not.toHaveProperty("createdByUserId");
-    expect(updated).not.toHaveProperty("responsibleUserId");
+    expect(updated.success).toBe(false);
+  });
+
+  it("refuses a mistyped assignee key on create and update instead of stripping it", () => {
+    // A mistyped `assigneeId` validated. It returned 200 or 201. It set
+    // `updatedAt`. It changed nothing. So an escalation read as filed while
+    // it reached no one.
+    const agentId = "11111111-2222-3333-4444-555555555555";
+    const createWrongKey = createIssueSchema.safeParse({ title: "Escalate", assigneeId: agentId });
+    const updateWrongKey = updateIssueSchema.safeParse({ assigneeId: agentId });
+
+    // The refusal must come from strictness. So it names the key. Any other
+    // parse failure would pass the check above and still hide the defect.
+    const issueLists = [createWrongKey, updateWrongKey].map((result) => {
+      if (result.success) throw new Error("a schema accepted the wrong assignee key");
+      return result.error.issues;
+    });
+    for (const issues of issueLists) {
+      const strictIssue = issues.find((entry) => entry.code === "unrecognized_keys");
+      expect(strictIssue).toBeDefined();
+      expect(JSON.stringify(strictIssue)).toContain("assigneeId");
+    }
+
+    // The real key still parses. So this test pins the typo, not assignment.
+    expect(createIssueSchema.safeParse({ title: "Escalate", assigneeAgentId: agentId }).success).toBe(true);
+    expect(updateIssueSchema.safeParse({ assigneeAgentId: agentId }).success).toBe(true);
   });
 
   it("allows false-positive recovery resolutions to atomically restore the source issue status", () => {

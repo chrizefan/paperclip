@@ -142,7 +142,13 @@ const support = await getEmbeddedPostgresTestSupport();
     for (const path of [`/api/issues/${task.id}/children`, `/api/companies/${f.companyId}/issues`]) {
       const response = await fetch(`${server.apiUrl}${path}`, {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ title: `Self decomposition ${path}`, parentId: task.id, assigneeAgentId: f.agentId, status: "backlog" }),
+        // `/children` names its parent in the path, and createChildIssueSchema
+        // omits a body `parentId` on purpose. Reusing one body across both
+        // routes used to rely on that key being silently stripped; the strict
+        // schemas now refuse it, so the body is built per route.
+        body: JSON.stringify({ title: `Self decomposition ${path}`,
+          ...(path.endsWith("/children") ? {} : { parentId: task.id }),
+          assigneeAgentId: f.agentId, status: "backlog" }),
       });
       const child = await response.json();
       expect(response.status, JSON.stringify(child)).toBe(201);
@@ -216,7 +222,9 @@ const support = await getEmbeddedPostgresTestSupport();
     for (const path of [`/api/companies/${f.companyId}/issues`, `/api/issues/${f.issueId}/children`]) {
       const response = await fetch(`${server.apiUrl}${path}`, {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ title: `Root subtask ${randomUUID()}`, parentId: f.issueId, assigneeAgentId: f.agentId, status: "backlog" }),
+        body: JSON.stringify({ title: `Root subtask ${randomUUID()}`,
+          ...(path.endsWith("/children") ? {} : { parentId: f.issueId }),
+          assigneeAgentId: f.agentId, status: "backlog" }),
       });
       const child = await response.json();
       expect(response.status, JSON.stringify(child)).toBe(201);
@@ -229,7 +237,8 @@ const support = await getEmbeddedPostgresTestSupport();
     for (const path of [`/api/companies/${f.companyId}/issues`, `/api/issues/${f.issueId}/children`]) {
       const response = await fetch(`${server.apiUrl}${path}`, {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "Root cannot escape into another project", parentId: f.issueId,
+        body: JSON.stringify({ title: "Root cannot escape into another project",
+          ...(path.endsWith("/children") ? {} : { parentId: f.issueId }),
           projectId: outside.id, assigneeAgentId: f.agentId, status: "backlog" }),
       });
       expect(response.status, JSON.stringify(await response.json())).toBe(403);
@@ -261,7 +270,8 @@ const support = await getEmbeddedPostgresTestSupport();
       const create = async (path: string, selection: Record<string, string>) => {
         const response = await fetch(`${server.apiUrl}${path}`, {
           method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ title: `Workspace scope ${randomUUID()}`, parentId: f.issueId,
+          body: JSON.stringify({ title: `Workspace scope ${randomUUID()}`,
+            ...(path.endsWith("/children") ? {} : { parentId: f.issueId }),
             assigneeAgentId: f.agentId, status: "backlog", ...selection }),
         });
         return { status: response.status, body: await response.json() };
@@ -333,6 +343,36 @@ const support = await getEmbeddedPostgresTestSupport();
     const result = await call(f, "create_task", { title: "Delegate ordinary work", idempotencyKey: "child" }) as any;
     expect(result.task.parentId).toBe(f.issueId);
     expect(await issueService(server.db).create(f.companyId, { title: "No project needed" })).toMatchObject({ projectId: null });
+  });
+
+  it("refuses an undeclared key on the child-create route instead of stripping it", async () => {
+    // The issue schemas were not strict, so a mistyped `assigneeId` validated,
+    // returned 201, and changed nothing. That is the accept-and-drop defect
+    // DIG-2097 exists to kill. A body `parentId` is refused for a separate
+    // reason: `/children` names its parent in the path and the route reads it
+    // from there, so a second source of truth would be silently ignored.
+    const f = await server.fixture({ disableWakeOnDemand: true });
+    const token = createLocalAgentJwt(f.agentId, f.companyId, "paperclip_runner", f.runId, f.responsibleUserId)!;
+    const post = (body: Record<string, unknown>) => fetch(`${server.apiUrl}/api/issues/${f.issueId}/children`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    for (const [key, value] of [["parentId", f.companyId], ["assigneeId", f.agentId]] as const) {
+      const response = await post({ title: `Child carrying a stray ${key}`, [key]: value });
+      const payload = await response.json();
+      expect(response.status, JSON.stringify(payload)).toBe(400);
+      // The refusal has to NAME the key, or a caller cannot tell a typo from a
+      // real field error.
+      expect(payload.details?.[0], JSON.stringify(payload)).toMatchObject({ code: "unrecognized_keys", keys: [key] });
+    }
+
+    // Control: the same call without a stray key still creates the child, so
+    // this pins a whitelist refusal and not a route that always answers 400.
+    const created = await post({ title: "Child with no stray key", assigneeAgentId: f.agentId, status: "backlog" });
+    const child = await created.json();
+    expect(created.status, JSON.stringify(child)).toBe(201);
+    expect(child).toMatchObject({ parentId: f.issueId, assigneeAgentId: f.agentId });
   });
 
   it("creates a project once through the production API and records it on the source feed", async () => {
