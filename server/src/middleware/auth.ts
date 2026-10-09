@@ -222,6 +222,15 @@ interface ActorMiddlewareOptions {
 
 const publicRoutineWebhookPath = /^\/api\/routine-triggers\/public\/[a-f0-9]{24}\/fire\/?$/i;
 
+// Public bootstrap routes an unauthenticated agent must be able to reach: an
+// agent accepting an invite and an agent claiming the key it was just issued
+// have no bearer yet by construction. Each of these routes performs its own
+// credential check on the secret carried in the request body and records the
+// action as `system`, so letting them through here exposes no board write.
+// Keep this list minimal and exact; every other /api route stays guarded below.
+const publicAgentBootstrapPath =
+  /^\/api\/(?:invites\/[^/]+\/accept|join-requests\/[^/]+\/claim-api-key)\/?$/i;
+
 const publicMcpGatewayProtocolPath = /^\/mcp\/gateways\/gw_[a-f0-9]{32}\/?$/i;
 
 /**
@@ -256,9 +265,16 @@ function declaresAgentRun(req: Request): boolean {
  *   browser attaches `Origin` to every same-origin non-GET request, so this
  *   covers the board. Comparing the host stops a foreign origin from riding in
  *   on a forged header value.
- * - `Sec-Fetch-*`, but only when `Origin` is absent. These are forbidden header
- *   names in the Fetch standard: a browser sets them and page JavaScript cannot
- *   forge them, so they survive when a browser omits `Origin`.
+ * - `Sec-Fetch-Site: same-origin`, but only when `Origin` is absent. These are
+ *   forbidden header names in the Fetch standard: a browser sets them and page
+ *   JavaScript cannot forge them, so they survive when a browser omits `Origin`.
+ *
+ * A bare `Sec-Fetch-Mode` is deliberately NOT accepted. Node's built-in `fetch()`
+ * sets `Sec-Fetch-Mode: cors` on every credential-less request, so accepting that
+ * header would let any ordinary Node script pass the guard and write as
+ * `local-board` without forging anything. `Sec-Fetch-Site` is the signal that
+ * actually separates the board from a server-side client, and Node does not
+ * synthesise it.
  *
  * `Referer` is intentionally ignored. It is missing often enough to be useless
  * and trivial to forge, which is exactly how the origin guard in #7763 was
@@ -275,7 +291,7 @@ function isBrowserBoardRequest(req: Request): boolean {
       return false;
     }
   }
-  return req.header("sec-fetch-mode") !== undefined;
+  return (req.header("sec-fetch-site") ?? "").toLowerCase() === "same-origin";
 }
 
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
@@ -296,6 +312,17 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     // Routine ingress authenticates its own bearer/signature. Never interpret
     // webhook credentials as agent keys or attach an ambient browser session.
     if (req.method === "POST" && publicRoutineWebhookPath.test(req.path)) {
+      req.actor = { type: "none", source: "none" };
+      next();
+      return;
+    }
+
+    // An agent's first two authenticated requests are its invite acceptance and
+    // its initial key claim. Neither can present a bearer, because neither has a
+    // key yet, so gating them on a resolved principal here means the guard runs
+    // before the route's own secret check and the request can never succeed.
+    // Let those two exact routes reach the checks they already implement.
+    if (req.method === "POST" && publicAgentBootstrapPath.test(req.path)) {
       req.actor = { type: "none", source: "none" };
       next();
       return;
