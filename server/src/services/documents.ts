@@ -359,13 +359,17 @@ export function documentService(db: Db) {
             }
 
             const nextRevisionNumber = existing.latestRevisionNumber + 1;
+            // An omitted title means "leave the stored title alone". An explicit null means
+            // "clear it", which upsertIssueDocumentSchema.title permits. ?? cannot tell those
+            // two cases apart, so the branch is on undefined, not on nullish.
+            const nextTitle = input.title === undefined ? existing.title : input.title;
             const [revision] = await tx
               .insert(documentRevisions)
               .values({
                 companyId: issue.companyId,
                 documentId: existing.id,
                 revisionNumber: nextRevisionNumber,
-                title: input.title ?? null,
+                title: nextTitle,
                 format: input.format,
                 body: input.body,
                 changeSummary: input.changeSummary ?? null,
@@ -379,7 +383,7 @@ export function documentService(db: Db) {
             await tx
               .update(documents)
               .set({
-                title: input.title ?? null,
+                title: nextTitle,
                 format: input.format,
                 latestBody: input.body,
                 latestRevisionId: revision.id,
@@ -400,7 +404,7 @@ export function documentService(db: Db) {
               created: false as const,
               document: {
                 ...existing,
-                title: input.title ?? null,
+                title: nextTitle,
                 format: input.format,
                 body: input.body,
                 latestRevisionId: revision.id,
