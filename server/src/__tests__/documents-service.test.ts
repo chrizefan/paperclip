@@ -228,4 +228,49 @@ describeEmbeddedPostgres("documentService system issue documents", () => {
       lockedAt: null,
     }));
   });
+
+  it("keeps the stored title when an update omits it, and clears it on an explicit null", async () => {
+    const { issueId } = await createIssueWithDocuments();
+    const seeded = (await svc.getIssueDocumentByKey(issueId, "plan"))!;
+    expect(seeded.title).toBe("Plan");
+
+    const preserved = await svc.upsertIssueDocument({
+      issueId,
+      key: "plan",
+      format: "markdown",
+      body: "# Plan revised without a title",
+      baseRevisionId: seeded.latestRevisionId,
+    });
+
+    // Positive control: the body moved and the revision counter advanced, so the title that
+    // survived is a merge rather than an update that quietly wrote nothing.
+    expect(preserved.created).toBe(false);
+    expect(preserved.document.body).toBe("# Plan revised without a title");
+    expect(preserved.document.latestRevisionNumber).toBe(seeded.latestRevisionNumber + 1);
+
+    // All three update-path writes carry the stored title forward: the return value, the
+    // documents row, and the revision row written by this call.
+    expect(preserved.document.title).toBe("Plan");
+    expect((await svc.getIssueDocumentByKey(issueId, "plan"))!.title).toBe("Plan");
+    const afterOmitted = await svc.listIssueDocumentRevisions(issueId, "plan");
+    expect(afterOmitted[0]!.revisionNumber).toBe(seeded.latestRevisionNumber + 1);
+    expect(afterOmitted[0]!.title).toBe("Plan");
+
+    const cleared = await svc.upsertIssueDocument({
+      issueId,
+      key: "plan",
+      title: null,
+      format: "markdown",
+      body: "# Plan revised with an explicit null title",
+      baseRevisionId: preserved.document.latestRevisionId,
+    });
+
+    // A caller that sends null on purpose still clears the title. toBeNull, not toBeFalsy,
+    // so an absent field cannot pass as a cleared one.
+    expect(cleared.document.title).toBeNull();
+    expect((await svc.getIssueDocumentByKey(issueId, "plan"))!.title).toBeNull();
+    const afterCleared = await svc.listIssueDocumentRevisions(issueId, "plan");
+    expect(afterCleared[0]!.revisionNumber).toBe(seeded.latestRevisionNumber + 2);
+    expect(afterCleared[0]!.title).toBeNull();
+  });
 });
