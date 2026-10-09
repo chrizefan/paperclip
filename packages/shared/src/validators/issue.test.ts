@@ -250,7 +250,9 @@ describe("issue validators", () => {
       createdByUserId: "spoofed-creator",
       responsibleUserId: "spoofed-responsible",
     });
-    const updated = updateIssueSchema.parse({
+    // Both attribution keys are `.omit()`ed from the update schema. So the
+    // update path must REFUSE them. It used to strip them silently instead.
+    const updated = updateIssueSchema.safeParse({
       title: "Do not update attribution",
       createdByUserId: "spoofed-creator",
       responsibleUserId: "spoofed-responsible",
@@ -258,8 +260,25 @@ describe("issue validators", () => {
 
     expect(created.createdByUserId).toBe("spoofed-creator");
     expect(created.responsibleUserId).toBe("spoofed-responsible");
-    expect(updated).not.toHaveProperty("createdByUserId");
-    expect(updated).not.toHaveProperty("responsibleUserId");
+    expect(updated.success).toBe(false);
+  });
+
+  it("refuses a mistyped assignee key on create and update instead of stripping it", () => {
+    // A mistyped `assigneeId` validated. It returned 200 or 201. It set
+    // `updatedAt`. It changed nothing. So an escalation read as filed while
+    // it reached no one.
+    const createWrongKey = createIssueSchema.safeParse({ title: "Escalate", assigneeId: "agent-1" });
+    const updateWrongKey = updateIssueSchema.safeParse({ assigneeId: "agent-1" });
+
+    if (createWrongKey.success) throw new Error("createIssueSchema accepted the wrong assignee key");
+    if (updateWrongKey.success) throw new Error("updateIssueSchema accepted the wrong assignee key");
+
+    // The refusal must NAME the wrong key. It must not only fail.
+    expect(JSON.stringify(createWrongKey.error.issues)).toContain("assigneeId");
+    expect(JSON.stringify(updateWrongKey.error.issues)).toContain("assigneeId");
+    // The real key still parses. So this test pins the typo, not assignment.
+    expect(createIssueSchema.safeParse({ title: "Escalate", assigneeAgentId: "agent-1" }).success).toBe(true);
+    expect(updateIssueSchema.safeParse({ assigneeAgentId: "agent-1" }).success).toBe(true);
   });
 
   it("allows false-positive recovery resolutions to atomically restore the source issue status", () => {
