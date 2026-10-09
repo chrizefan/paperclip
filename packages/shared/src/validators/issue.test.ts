@@ -267,18 +267,25 @@ describe("issue validators", () => {
     // A mistyped `assigneeId` validated. It returned 200 or 201. It set
     // `updatedAt`. It changed nothing. So an escalation read as filed while
     // it reached no one.
-    const createWrongKey = createIssueSchema.safeParse({ title: "Escalate", assigneeId: "agent-1" });
-    const updateWrongKey = updateIssueSchema.safeParse({ assigneeId: "agent-1" });
+    const agentId = "11111111-2222-3333-4444-555555555555";
+    const createWrongKey = createIssueSchema.safeParse({ title: "Escalate", assigneeId: agentId });
+    const updateWrongKey = updateIssueSchema.safeParse({ assigneeId: agentId });
 
-    if (createWrongKey.success) throw new Error("createIssueSchema accepted the wrong assignee key");
-    if (updateWrongKey.success) throw new Error("updateIssueSchema accepted the wrong assignee key");
+    // The refusal must come from strictness. So it names the key. Any other
+    // parse failure would pass the check above and still hide the defect.
+    const issueLists = [createWrongKey, updateWrongKey].map((result) => {
+      if (result.success) throw new Error("a schema accepted the wrong assignee key");
+      return result.error.issues;
+    });
+    for (const issues of issueLists) {
+      const strictIssue = issues.find((entry) => entry.code === "unrecognized_keys");
+      expect(strictIssue).toBeDefined();
+      expect(JSON.stringify(strictIssue)).toContain("assigneeId");
+    }
 
-    // The refusal must NAME the wrong key. It must not only fail.
-    expect(JSON.stringify(createWrongKey.error.issues)).toContain("assigneeId");
-    expect(JSON.stringify(updateWrongKey.error.issues)).toContain("assigneeId");
     // The real key still parses. So this test pins the typo, not assignment.
-    expect(createIssueSchema.safeParse({ title: "Escalate", assigneeAgentId: "agent-1" }).success).toBe(true);
-    expect(updateIssueSchema.safeParse({ assigneeAgentId: "agent-1" }).success).toBe(true);
+    expect(createIssueSchema.safeParse({ title: "Escalate", assigneeAgentId: agentId }).success).toBe(true);
+    expect(updateIssueSchema.safeParse({ assigneeAgentId: agentId }).success).toBe(true);
   });
 
   it("allows false-positive recovery resolutions to atomically restore the source issue status", () => {
