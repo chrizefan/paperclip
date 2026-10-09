@@ -250,7 +250,10 @@ describe("issue validators", () => {
       createdByUserId: "spoofed-creator",
       responsibleUserId: "spoofed-responsible",
     });
-    const updated = updateIssueSchema.parse({
+    // Both attribution keys are `.omit()`ed from the update schema, so the
+    // update path must REFUSE them. It used to strip them silently instead,
+    // which is the DIG-2097 false-success shape.
+    const updated = updateIssueSchema.safeParse({
       title: "Do not update attribution",
       createdByUserId: "spoofed-creator",
       responsibleUserId: "spoofed-responsible",
@@ -258,8 +261,24 @@ describe("issue validators", () => {
 
     expect(created.createdByUserId).toBe("spoofed-creator");
     expect(created.responsibleUserId).toBe("spoofed-responsible");
-    expect(updated).not.toHaveProperty("createdByUserId");
-    expect(updated).not.toHaveProperty("responsibleUserId");
+    expect(updated.success).toBe(false);
+  });
+
+  it("refuses a mistyped assignee key on create and update instead of stripping it", () => {
+    // DIG-2097: `assigneeId` validated, answered 200/201, advanced updatedAt
+    // and applied nothing, so an escalation read as filed while reaching no one.
+    const createWrongKey = createIssueSchema.safeParse({ title: "Escalate", assigneeId: "agent-1" });
+    const updateWrongKey = updateIssueSchema.safeParse({ assigneeId: "agent-1" });
+
+    if (createWrongKey.success) throw new Error("createIssueSchema accepted the wrong assignee key");
+    if (updateWrongKey.success) throw new Error("updateIssueSchema accepted the wrong assignee key");
+
+    // The refusal must NAME the offending key, not merely fail.
+    expect(JSON.stringify(createWrongKey.error.issues)).toContain("assigneeId");
+    expect(JSON.stringify(updateWrongKey.error.issues)).toContain("assigneeId");
+    // The real key still parses, so this pins the typo and not assignment itself.
+    expect(createIssueSchema.safeParse({ title: "Escalate", assigneeAgentId: "agent-1" }).success).toBe(true);
+    expect(updateIssueSchema.safeParse({ assigneeAgentId: "agent-1" }).success).toBe(true);
   });
 
   it("allows false-positive recovery resolutions to atomically restore the source issue status", () => {

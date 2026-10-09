@@ -746,7 +746,10 @@ const createIssueBaseSchema = z.object({
     .strict()
     .optional()
     .nullable(),
-});
+  // DIG-2097: an unknown key used to be stripped, so a mistyped `assigneeId`
+  // still validated, answered 200/201, advanced updatedAt and applied nothing.
+  // Strictness declared here is inherited by every schema derived from this base.
+}).strict();
 
 function requireBlockedStatusForUnblockDescriptor(
   value: { status?: string; unblockDescriptor?: unknown },
@@ -895,7 +898,11 @@ export const updateIssueSchema = objectWithoutDefaults(
     /** Assignment-only handoff; the following structured goal action owns the wake. */
     deferWakeForGoal: z.boolean().optional(),
     hiddenAt: z.string().datetime().nullable().optional(),
-  });
+    // DIG-2097: this .strict() is NOT inherited from `createIssueBaseSchema`.
+    // `objectWithoutDefaults` rebuilds a fresh `z.object` from the raw shape,
+    // which resets unknownKeys to the default "strip", so the PATCH path kept
+    // dropping unknown keys silently even with the base made strict.
+  }).strict();
 
 export type UpdateIssue = z.infer<typeof updateIssueSchema>;
 export type IssueExecutionWorkspaceSettings = z.infer<
