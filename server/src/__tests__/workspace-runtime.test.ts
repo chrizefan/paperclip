@@ -878,6 +878,238 @@ describe("realizeExecutionWorkspace", () => {
     expect(second.branchName).toBe(first.branchName);
   });
 
+  // --- DIG-3150: concurrent worktree provisioning on one repository ---
+
+  function worktreeRealizationInput(repoRoot: string, identifier: string) {
+    return {
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "origin/master",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+        },
+      },
+      issue: {
+        id: `issue-${identifier}`,
+        identifier,
+        title: "Add Worktree Support",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    } satisfies Parameters<typeof realizeExecutionWorkspace>[0];
+  }
+
+  async function resolveGitBinaryPath(): Promise<string> {
+    const probed: string[] = [];
+    for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+      if (!dir) continue;
+      const candidate = path.join(dir, "git");
+      probed.push(candidate);
+      try {
+        await fs.stat(candidate);
+        return candidate;
+      } catch {
+        // keep looking
+      }
+    }
+    throw new Error(`git not found on PATH: ${probed.join(", ")}`);
+  }
+
+  const GIT_CONFIG_LOCK_STDERR =
+    "error: could not lock config file .git/config: File exists\n" +
+    "error: unable to write upstream branch configuration\n";
+
+  /**
+   * Prepend a `git` shim that answers the create call `worktree add -b <branch> …`
+   * for each named branch with `stderr` a fixed number of times, then delegates
+   * everything to the real binary. The failure count lives in one file per
+   * branch so eight concurrent creates cannot clobber each other's count. The
+   * log is what lets a test tell "the retry ran" from "the first attempt
+   * happened to succeed", and the per-branch counts are what make that
+   * deterministic instead of timing-dependent.
+   */
+  async function installContentionShim(failuresByBranch: Record<string, number>, stderr: string) {
+    const shimDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-git-shim-"));
+    const logPath = path.join(shimDir, "invocations.jsonl");
+    const realGit = await resolveGitBinaryPath();
+    const originalPath = process.env.PATH ?? "";
+    const shimPath = path.join(shimDir, "git");
+    await fs.writeFile(
+      shimPath,
+      [
+        "#!/usr/bin/env node",
+        'const { spawnSync } = require("node:child_process");',
+        'const fs = require("node:fs");',
+        'const nodePath = require("node:path");',
+        "const args = process.argv.slice(2);",
+        `const SHIM_DIR = ${JSON.stringify(shimDir)};`,
+        `const LOG = ${JSON.stringify(logPath)};`,
+        `const PLAN = ${JSON.stringify(failuresByBranch)};`,
+        `const STDERR = ${JSON.stringify(stderr)};`,
+        `const REAL = ${JSON.stringify(realGit)};`,
+        'fs.appendFileSync(LOG, JSON.stringify(args) + "\\n");',
+        'const isCreate = args[0] === "worktree" && args[1] === "add" && args[2] === "-b";',
+        "if (isCreate && Object.prototype.hasOwnProperty.call(PLAN, args[3])) {",
+        '  const counterPath = nodePath.join(SHIM_DIR, "count-" + args[3]);',
+        "  let seen = 0;",
+        "  try { seen = Number.parseInt(fs.readFileSync(counterPath, 'utf8'), 10) || 0; } catch { seen = 0; }",
+        "  if (seen < PLAN[args[3]]) {",
+        '    fs.writeFileSync(counterPath, String(seen + 1));',
+        "    process.stderr.write(STDERR);",
+        "    process.exit(255);",
+        "  }",
+        "}",
+        'const r = spawnSync(REAL, args, { stdio: "inherit" });',
+        "process.exit(r.status === null ? 1 : r.status);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.chmod(shimPath, 0o755);
+    process.env.PATH = `${shimDir}${path.delimiter}${originalPath}`;
+    const invocations = async () =>
+      (await fs.readFile(logPath, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+    return {
+      invocations,
+      createAttempts: async (branch: string) =>
+        (await invocations()).filter(
+          (argv) => argv[0] === "worktree" && argv[1] === "add" && argv[2] === "-b" && argv[3] === branch,
+        ).length,
+      restore: () => {
+        process.env.PATH = originalPath;
+      },
+    };
+  }
+
+  /**
+   * The upstream tracking config git writes for `worktree add -b <b> <remote-ref>`.
+   * Empty when the branch was attached rather than created: the worktree exists
+   * and the run succeeds while the branch has no `branch.<b>.remote` for its
+   * first push, which is the quiet failure the retry must not have.
+   */
+  async function branchUpstreamConfig(repoRoot: string, branch: string): Promise<string> {
+    try {
+      return await readGit(repoRoot, ["config", "--get-regexp", `^branch\\.${branch}\\.(remote|merge)$`]);
+    } catch {
+      return "";
+    }
+  }
+
+  it("retries the worktree create after git reports repository config contention", async () => {
+    const { repoRoot } = await createClonedRepoWithRemote();
+    const branch = "PAP-501-add-worktree-support";
+    // Two injected failures = the first attempt plus both retries. Without the
+    // ladder the create throws on its first attempt and there is no result at
+    // all. With a ladder that retries but does not drop the branch git left
+    // behind, the third attempt hits `a branch named … already exists`, the
+    // existing idempotent ladder attaches it instead, and the branch ends up
+    // with NO upstream config - so the assertion below pins the half-created
+    // branch cleanup, not just the retry.
+    const shim = await installContentionShim({ [branch]: 2 }, GIT_CONFIG_LOCK_STDERR);
+    try {
+      const result = await realizeExecutionWorkspace(worktreeRealizationInput(repoRoot, "PAP-501"));
+      expect(result.strategy).toBe("git_worktree");
+      expect(result.created).toBe(true);
+      expect(result.branchCreatedByRuntime).toBe(true);
+      expect(result.branchName).toBe(branch);
+      await expect(fs.stat(path.join(result.cwd, ".git"))).resolves.toBeTruthy();
+      expect(await readGit(repoRoot, ["worktree", "list"])).toContain(result.cwd);
+      expect(await shim.createAttempts(branch)).toBe(3);
+      expect(await branchUpstreamConfig(repoRoot, branch)).not.toBe("");
+    } finally {
+      shim.restore();
+    }
+  }, 30_000);
+
+  it("does not retry a worktree create that failed for an unrelated reason", async () => {
+    const { repoRoot } = await createClonedRepoWithRemote();
+    const branch = "PAP-502-add-worktree-support";
+    const shim = await installContentionShim({ [branch]: 2 }, "fatal: invalid reference: origin/master\n");
+    try {
+      await expect(
+        realizeExecutionWorkspace(worktreeRealizationInput(repoRoot, "PAP-502")),
+      ).rejects.toThrow(/invalid reference: origin\/master/);
+      // The plan allows two failures, so a retry that was not message-scoped
+      // would fire and then succeed. Reaching the caller on attempt one, with
+      // failures still planned, proves only the config-lock message retries.
+      expect(await shim.createAttempts(branch)).toBe(1);
+      expect(await readGit(repoRoot, ["worktree", "list"])).not.toContain("PAP-502");
+    } finally {
+      shim.restore();
+    }
+  }, 30_000);
+
+  it("provisions a burst of concurrent worktrees without a single create failure", async () => {
+    const { repoRoot } = await createClonedRepoWithRemote();
+    for (const identifier of ["PAP-600", "PAP-601", "PAP-602"]) {
+      await realizeExecutionWorkspace(worktreeRealizationInput(repoRoot, identifier));
+    }
+
+    // Eight branches, two injected contention failures each: every seat in the
+    // burst contends for the same repository config lock, and every one of them
+    // still lands a worktree whose branch carries upstream tracking.
+    const identifiers = [
+      "PAP-610",
+      "PAP-611",
+      "PAP-612",
+      "PATCH-613",
+      "DIG-614",
+      "HOTFIX-615",
+      "OPS-616",
+      "QA-617",
+    ];
+    const plan: Record<string, number> = {};
+    for (const identifier of identifiers) {
+      plan[`${identifier}-add-worktree-support`] = 2;
+    }
+    const shim = await installContentionShim(plan, GIT_CONFIG_LOCK_STDERR);
+    try {
+      const settled = await Promise.allSettled(
+        identifiers.map((identifier) =>
+          realizeExecutionWorkspace(worktreeRealizationInput(repoRoot, identifier)),
+        ),
+      );
+
+      const failures = settled.filter((r) => r.status === "rejected");
+      expect(
+        failures.map((f) => (f as PromiseRejectedResult).reason?.message ?? String(f.reason)),
+      ).toEqual([]);
+      expect(settled.every((r) => r.status === "fulfilled")).toBe(true);
+
+      const cwds = settled.map(
+        (r) => (r as PromiseFulfilledResult<RealizedExecutionWorkspace>).value.cwd,
+      );
+      expect(new Set(cwds).size).toBe(identifiers.length);
+      for (const cwd of cwds) {
+        await expect(fs.stat(path.join(cwd, ".git"))).resolves.toBeTruthy();
+      }
+      const registered = await readGit(repoRoot, ["worktree", "list"]);
+      for (const cwd of cwds) {
+        expect(registered).toContain(cwd);
+      }
+      for (const identifier of identifiers) {
+        const branch = `${identifier}-add-worktree-support`;
+        expect(await shim.createAttempts(branch)).toBeGreaterThanOrEqual(3);
+        expect(await branchUpstreamConfig(repoRoot, branch)).not.toBe("");
+      }
+    } finally {
+      shim.restore();
+    }
+  }, 60_000);
+
   it("retains the project provision command when an issue overrides its base branch", async () => {
     const repoRoot = await createTempRepo();
     await fs.mkdir(path.join(repoRoot, "scripts"));

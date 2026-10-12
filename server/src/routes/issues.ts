@@ -349,6 +349,7 @@ import {
   observeCrossIssueInfluence,
   type CrossIssueInfluenceKind,
 } from "../services/cross-issue-influence-limit.js";
+import { bindRunSourceIssueToCheckout } from "../services/run-source-issue.js";
 import {
   getNativeSessionSteeringState,
   NativeSessionSteeringError,
@@ -15670,6 +15671,28 @@ export function issueRoutes(
           return;
         }
         throw error;
+      }
+      // A run admitted without an issue — a watchdog wake, a board Wake, a
+      // retry chain — carries no source issue, and the cross-issue influence
+      // cap fails closed on every issue write before it can apply its own-issue
+      // exemption. Holding the checkout is the run declaring its scope, so
+      // record it here. Fills a gap only: a run admitted with a source issue
+      // keeps it, so this cannot hand a run another issue's exemption.
+      if (updated && checkoutRunId) {
+        try {
+          await bindRunSourceIssueToCheckout(db, {
+            runId: checkoutRunId,
+            companyId: updated.companyId,
+            issueId: updated.id,
+          });
+        } catch (err) {
+          // The checkout itself is committed and must not fail because of this.
+          // Log loudly: without the binding this run's next issue write 403s.
+          logger.error(
+            { err, runId: checkoutRunId, issueId: updated.id },
+            "failed to bind the checkout run's source issue",
+          );
+        }
       }
       const actor = getActorInfo(req);
       if (updated?.harnessKind === "skill_test") {
