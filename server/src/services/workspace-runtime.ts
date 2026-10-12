@@ -3195,6 +3195,97 @@ async function resolveGitRepoRootForWorkspaceCleanup(
   return path.dirname(resolvedGitDir);
 }
 
+/**
+ * Bounded backoff before each retry of the worktree create call under git
+ * config contention: none before the first attempt, then 250 ms, 750 ms, 2 s
+ * and 5 s before each retry. Five total attempts is a liveness parameter, not
+ * a security control - the retry only ever fires for git's own config-lock
+ * contention message (see {@link isGitConfigLockContentionError}). The ladder
+ * is sized for the contention the platform actually creates: every seat
+ * provisioning at once runs a real `git worktree add` for a different branch
+ * against the same repository config, so the honest worst case is one seat
+ * losing this race once per concurrent sibling, not once in total.
+ */
+const WORKTREE_CREATE_CONFIG_LOCK_RETRY_DELAYS_MS = [250, 750, 2_000, 5_000] as const;
+
+/**
+ * True only for git's transient failure to take the repository config lock.
+ *
+ * `git worktree add -b <branch> <baseRef>` records upstream tracking by
+ * writing `branch.<name>.remote` and `branch.<name>.merge` into
+ * `.git/config`, and that write is the only contended step in the create path:
+ * when several seats provision worktrees on one repository at the same moment -
+ * a repository that already carries hundreds of registered worktrees - the
+ * losers fail with `error: could not lock config file .git/config: File
+ * exists` plus `error: unable to write upstream branch configuration`. Every
+ * other create failure (missing base ref, existing branch, occupied path, bad
+ * arguments) reports a different message and must still surface on the first
+ * attempt, so the caller sees it and the idempotent fallbacks below stay
+ * reachable.
+ */
+function isGitConfigLockContentionError(error: unknown): boolean {
+  return gitErrorIncludes(error, "could not lock config file");
+}
+
+/**
+ * Spread a retry delay by +/-25% so a burst of contending seats does not
+ * re-collide on the same millisecond. `Math.random` is the production source;
+ * the jitter is deliberately not injectable because the only property the
+ * suite pins is that a contended create eventually succeeds, not the delay it
+ * waited.
+ */
+function worktreeCreateRetryDelayMs(baseDelayMs: number): number {
+  const jitter = baseDelayMs * 0.25 * (Math.random() * 2 - 1);
+  return Math.max(0, Math.round(baseDelayMs + jitter));
+}
+
+/**
+ * Drop the branch ref a contended create left behind, so the retry is a clean
+ * create again.
+ *
+ * `git worktree add -b <branch> <remoteRef>` creates the branch first and only
+ * then records upstream tracking, so when the config write loses the lock git
+ * exits non-zero with the branch ref in place and no worktree directory. Retrying
+ * the identical argv then fails with `fatal: a branch named <branch> already
+ * exists`, which the caller's existing idempotent ladder would satisfy by
+ * ATTACHING the branch - and an attach never writes upstream tracking, so the
+ * branch would silently end up without `branch.<name>.remote`/`merge`: the same
+ * defect the retry exists to remove, quietly.
+ *
+ * The ref is removed only when it resolves to exactly `baseRefSha`, i.e. it
+ * carries nothing of ours, and only when no worktree is registered for it. If
+ * emptiness cannot be proven the ref is left alone and the caller's ladder
+ * handles the branch exactly as it did before this retry existed.
+ */
+async function discardBranchLeftByContendedWorktreeCreate(
+  repoRoot: string,
+  branchName: string,
+  baseRefSha: string | null,
+): Promise<void> {
+  if (!baseRefSha) return;
+  const branchRef = `refs/heads/${branchName}`;
+  let existingSha: string;
+  try {
+    existingSha = await runGit(["rev-parse", "--verify", "--quiet", branchRef], repoRoot);
+  } catch {
+    return; // no such ref: the failed create left nothing behind
+  }
+  if (!existingSha || existingSha !== baseRefSha) return; // carries commits: not ours to drop
+  try {
+    const registered = await runGit(["worktree", "list", "--porcelain"], repoRoot);
+    if (new RegExp(`^branch ${branchRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m").test(registered)) {
+      return; // a worktree still uses it
+    }
+  } catch {
+    return; // cannot prove it is unused
+  }
+  try {
+    await runGit(["branch", "-d", branchName], repoRoot);
+  } catch {
+    // Best effort: the retry below re-reads git's own state either way.
+  }
+}
+
 export async function realizeExecutionWorkspace(input: {
   db?: Db | null;
   base: ExecutionWorkspaceInput;
@@ -3554,21 +3645,42 @@ export async function realizeExecutionWorkspace(input: {
 
   let branchCreatedByRuntime = true;
   try {
-    await recordGitOperation(input.recorder, {
-      phase: "worktree_prepare",
-      args: ["worktree", "add", "-b", branchName, worktreePath, baseRef],
-      cwd: repoRoot,
-      metadata: {
-        repoRoot,
-        worktreePath,
-        branchName,
-        baseRef,
-        baseRefSha: currentBaseRefSha,
-        created: true,
-      },
-      successMessage: `Created git worktree at ${worktreePath}\n`,
-      failureLabel: `git worktree add ${worktreePath}`,
-    });
+    // Under config contention git aborts before it leaves anything behind, so a
+    // retry starts from the same state. Should a future git version instead
+    // leave the branch or the worktree in place and then fail the config
+    // write, the retry reports `already exists` and the idempotent ladder
+    // below takes over - the two halves cover each other either way.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await recordGitOperation(input.recorder, {
+          phase: "worktree_prepare",
+          args: ["worktree", "add", "-b", branchName, worktreePath, baseRef],
+          cwd: repoRoot,
+          metadata: {
+            repoRoot,
+            worktreePath,
+            branchName,
+            baseRef,
+            baseRefSha: currentBaseRefSha,
+            created: true,
+          },
+          successMessage: `Created git worktree at ${worktreePath}\n`,
+          failureLabel: `git worktree add ${worktreePath}`,
+        });
+        break;
+      } catch (error) {
+        if (
+          !isGitConfigLockContentionError(error) ||
+          attempt >= WORKTREE_CREATE_CONFIG_LOCK_RETRY_DELAYS_MS.length
+        ) {
+          throw error;
+        }
+        await discardBranchLeftByContendedWorktreeCreate(repoRoot, branchName, currentBaseRefSha);
+        await delay(
+          worktreeCreateRetryDelayMs(WORKTREE_CREATE_CONFIG_LOCK_RETRY_DELAYS_MS[attempt]),
+        );
+      }
+    }
   } catch (error) {
     if (!gitErrorIncludes(error, "already exists")) {
       throw error;
