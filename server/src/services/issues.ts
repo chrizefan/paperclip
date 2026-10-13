@@ -106,7 +106,7 @@ import {
   isUuidLike,
   normalizeIssueIdentifier as normalizeIssueReferenceIdentifier,
 } from "@paperclipai/shared";
-import { conflict, HttpError, notFound, unprocessable } from "../errors.js";
+import { conflict, HttpError, notFound, secretDetected, unprocessable } from "../errors.js";
 import { isForeignKeyViolation } from "../db-errors.js";
 import { logger } from "../middleware/logger.js";
 import { parseObject } from "../adapters/utils.js";
@@ -144,6 +144,7 @@ import {
   normalizeIssueExecutionPolicy,
 } from "./issue-execution-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { detectSecret } from "./secret-detection.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { redactSensitiveText } from "../redaction.js";
 import {
@@ -12249,8 +12250,16 @@ export function issueService(db: Db) {
 
       if (!issue) throw notFound("Issue not found");
 
-      if (issue.conversationAgentId && actor.userId && !(await instanceSettingsService(dbOrTx).getExperimental()).enableAgentChat) {
+      const experimentalSettings = await instanceSettingsService(dbOrTx).getExperimental();
+      if (issue.conversationAgentId && actor.userId && !experimentalSettings.enableAgentChat) {
         throw unprocessable("Agent Chat is disabled in Experimental settings");
+      }
+      // Refuse a secret before it is persisted. This is the single choke point:
+      // every writer (comment route, approvals, board chat, watchdog) calls
+      // addComment. Only the rule name and a salted fingerprint leave this guard.
+      if (experimentalSettings.enableSecretWriteDetection) {
+        const secret = detectSecret(body);
+        if (secret) throw secretDetected(secret.rule, secret.fingerprint);
       }
       const currentUserRedactionOptions = {
         // Keep every read on the caller's transaction connection. Re-entering

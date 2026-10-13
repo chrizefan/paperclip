@@ -315,6 +315,14 @@ export const INSTANCE_FEATURE_CATALOG: Record<InstanceFeatureKey, FeatureCatalog
     cloudDefault: true,
     selfHostedDefault: false,
   },
+  enableSecretWriteDetection: {
+    title: "Secret Write Detection",
+    description:
+      "Refuse a write that carries a secret value before it is persisted. Issue comments are checked now; interactions, documents and work products follow through the same guard. The refusal names the matching rule and returns only a salted fingerprint of the value.",
+    tier: "managed",
+    cloudDefault: true,
+    selfHostedDefault: true,
+  },
   enableSandboxDuplexBridge: {
     title: "Sandbox Duplex Bridge",
     description:

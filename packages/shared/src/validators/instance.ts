@@ -79,6 +79,10 @@ export const instanceExperimentalSettingsSchema = z.object({
   enableWorkspaceBranchReconcileForward: z.boolean().default(true),
   enableWorkspaceDirtyQuarantineRepair: z.boolean().default(true),
   enableOwnerInstanceAdmin: z.boolean().default(false),
+  // Refuse a write that carries a secret value before it is persisted (issue
+  // comments first; interactions, documents and work products later). Default
+  // on. The response names the rule and carries only a salted fingerprint.
+  enableSecretWriteDetection: z.boolean().default(true),
   // Kill switch for the sandbox duplex command-stream bridge. Default off. When
   // off the host keeps the file bridge for every run with no manifest change and
   // no redeploy. The host reads this per run before it selects the transport.

@@ -121,6 +121,13 @@ export interface InstanceExperimentalSettings {
    */
   enableOwnerInstanceAdmin: boolean;
   /**
+   * Refuse a write that carries a secret value before it is persisted. Issue
+   * comments are checked now; interactions, documents and work products follow
+   * through the same guard. The refusal names the matching rule and returns only
+   * a salted fingerprint of the value. On by default.
+   */
+  enableSecretWriteDetection: boolean;
+  /**
    * Kill switch for the sandbox duplex command-stream bridge. Default off. The
    * host reads this per run before it selects the callback bridge transport.
    * Off forces the file bridge for every run with no manifest change and no

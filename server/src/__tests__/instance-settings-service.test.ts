@@ -70,6 +70,7 @@ describe("instance settings service", () => {
       enableWorkspaceBranchReconcileForward: true,
       enableWorkspaceDirtyQuarantineRepair: false,
       enableOwnerInstanceAdmin: false,
+      enableSecretWriteDetection: true,
       enableSandboxDuplexBridge: false,
       enableRunnerPreviewIngress: false,
       enableWorktreeRunExecution: false,
