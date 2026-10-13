@@ -610,6 +610,51 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
       });
     });
 
+    it("keeps a card-addressee run queued on an issue it does not own", async () => {
+      // Regression for DIG-3333: this run was cancelled with
+      // issue_assignee_changed before it could start, because the addressee of
+      // a question card is picked by the card author and is routinely not the
+      // assignee. The seed mirrors the reassignment case above exactly except
+      // for the wake reason, so the pair differs on one input.
+      const { companyId, agentId } = await seedCompanyAndAgent();
+      const replacementAgentId = randomUUID();
+      await seedAgent({ id: replacementAgentId, companyId, name: "ReplacementCoder" });
+      const issueId = randomUUID();
+      await seedIssue({ companyId, issueId, status: "in_progress", assigneeAgentId: replacementAgentId });
+
+      const adapter = createPostgresRunDispatchAdapter(db);
+      const now = new Date();
+      const runId = await seedRun({
+        companyId,
+        agentId,
+        // The literal, not the exported constant: this pins the wire value the
+        // platform writes, so importing the constant would move the
+        // expectation along with any change to it.
+        contextSnapshot: {
+          issueId,
+          taskId: issueId,
+          wakeReason: "interaction_pending",
+          wakeSource: "automation",
+          wakeTriggerDetail: "system",
+        },
+      });
+      const result = await adapter.cancelStaleQueuedRun({
+        runId,
+        companyId,
+        expectedStatus: "queued",
+        now,
+      });
+
+      expect(result).toMatchObject({ outcome: "not_stale" });
+      // Stronger than the return value: nothing wrote to the run row.
+      const persisted = await db
+        .select({ status: heartbeatRuns.status })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, runId))
+        .then((rows) => rows[0]);
+      expect(persisted?.status).toBe("queued");
+    });
+
     it(
       "reads the locked issue state and cancels in the same semantic transaction",
       async () => {

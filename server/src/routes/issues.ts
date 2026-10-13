@@ -8,6 +8,7 @@ import { queuedInteractionId, readQueuedInteractionResponse, hasQueuedInteractio
 import { deliverConversationComments, isConversation } from "../services/agent-conversations.js";
 import { issueRecoveryActionReadModel } from "../services/issue-recovery-actions.js";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
+import { INTERACTION_PENDING_WAKE_REASON } from "../modules/run-dispatch/index.js";
 import { requiresExecutionReconciliation } from "@paperclipai/shared";
 import {
   validateExecutionReconciliation,
@@ -15964,7 +15965,7 @@ export function issueRoutes(
           .wakeup(interaction.addresseeAgentId, {
             source: "automation",
             triggerDetail: "system",
-            reason: "interaction_pending",
+            reason: INTERACTION_PENDING_WAKE_REASON,
             payload: {
               issueId: issue.id,
               interactionId: interaction.id,
@@ -15983,7 +15984,7 @@ export function issueRoutes(
               interactionKind: interaction.kind,
               sourceCommentId: interaction.sourceCommentId ?? null,
               sourceRunId: interaction.sourceRunId ?? null,
-              wakeReason: "interaction_pending",
+              wakeReason: INTERACTION_PENDING_WAKE_REASON,
               source: "issue.interaction.created",
             },
           })

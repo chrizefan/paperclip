@@ -273,6 +273,26 @@ describe("decideQueuedRunStaleness", () => {
     });
   });
 
+  it("keeps a card-addressee wake as current ownership while a plain non-assignee wake stays a reassignment", () => {
+    const nonAssignee = { issueAssigneeAgentId: "agent-2" } satisfies Partial<QueuedRunFacts>;
+
+    // The defect: the addressee is not the assignee by design and the
+    // assignee never changed, so the queued run must not be cancelled.
+    expect(
+      decideQueuedRunStaleness(
+        { ...baseStalenessFacts(), ...nonAssignee, isPendingInteractionWake: true },
+        NOW,
+      ),
+    ).toEqual({ stale: false });
+
+    // Control, in the same test so the exemption can never read as a blanket
+    // pass for every non-assignee run: the same facts without the signal are
+    // still cancelled.
+    expect(
+      decideQueuedRunStaleness({ ...baseStalenessFacts(), ...nonAssignee }, NOW),
+    ).toMatchObject({ stale: true, errorCode: "issue_assignee_changed" });
+  });
+
   it.each([
     {
       name: "issue_not_found",

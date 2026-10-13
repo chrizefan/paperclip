@@ -47,6 +47,7 @@ import {
   allowsIssueInteractionWake,
   deriveCommentId,
   isNonAssigneeWorkspaceBusyRetry,
+  isPendingInteractionWake,
   isResolvedInteractionContinuationWakeContext,
 } from "../domain/wake-context.js";
 import type {
@@ -532,6 +533,7 @@ export function createPostgresRunDispatchAdapter(
       context,
       ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS,
     );
+    const pendingInteractionWake = isPendingInteractionWake(context);
     const resumeIntent = context.resumeIntent === true || context.followUpRequested === true;
     const wakeReason = readNonEmptyString(context.wakeReason);
     const retryReason =
@@ -605,6 +607,7 @@ export function createPostgresRunDispatchAdapter(
       isConnectionContinuation: (isResolvedInteractionContinuation && context.interactionKind === "connection_intent")
         || context.source === "connection_tools.refreshed",
       isInteractionWake,
+      isPendingInteractionWake: pendingInteractionWake,
       isAuthorizedSourceScopedRecovery,
       isNonAssigneeWorkspaceBusyRetry: isNonAssigneeWorkspaceBusyRetry(retryReason, context),
       resumeIntent,

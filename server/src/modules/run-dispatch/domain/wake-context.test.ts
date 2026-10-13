@@ -4,6 +4,7 @@ import {
   deriveCommentId,
   extractWakeCommentIds,
   isNonAssigneeWorkspaceBusyRetry,
+  isPendingInteractionWake,
   isResolvedInteractionContinuationWakeContext,
   WORKSPACE_BUSY_RETRY_REASON,
 } from "./wake-context.js";
@@ -59,6 +60,36 @@ describe("wake context", () => {
       wakeCommentId: "comment-1",
     }, allowed)).toBe(false);
     expect(allowsIssueInteractionWake({ wakeReason: "issue_commented" }, allowed)).toBe(false);
+  });
+
+  it("recognizes the card-addressee wake from the shape the platform persists, and only that", () => {
+    // The snapshot below is the one a live DIG-3326 addressee run actually
+    // carried: the persistence step narrows it to these six keys, so no other
+    // signal (no comment id, no interaction id) survives for a gate to read.
+    expect(isPendingInteractionWake({
+      issueId: "issue-1",
+      taskId: "issue-1",
+      taskKey: "DIG-3326",
+      wakeReason: "interaction_pending",
+      wakeSource: "automation",
+      wakeTriggerDetail: "system",
+    })).toBe(true);
+
+    // Controls. An assignment wake is the reassignment this guard exists to
+    // catch; a comment wake is already covered by allowsIssueInteractionWake;
+    // the rest must not be swept in by a loose match.
+    for (const context of [
+      { wakeReason: "issue_assigned", wakeSource: "assignment" },
+      { wakeReason: "issue_commented", wakeCommentId: "comment-1" },
+      { wakeReason: "issue_continuation_needed" },
+      { wakeReason: "  interaction_pending  " },
+      { wakeReason: "Interaction_Pending" },
+      { wakeReason: "" },
+      {},
+      undefined,
+    ]) {
+      expect(isPendingInteractionWake(context)).toBe(false);
+    }
   });
 
   it.each(["accepted", "answered", "cancelled", "rejected"])(

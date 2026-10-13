@@ -22,6 +22,14 @@ export const AI_CONNECTION_BUSY_RETRY_REASON = "ai_connection_busy";
 export const INTERACTION_CONTINUATION_INFRA_RETRY_REASON = "interaction_continuation_infra_retry";
 export const INTERACTION_CONTINUATION_INFRA_WAKE_REASON = "interaction_continuation_infra_retry";
 export const WAKE_COMMENT_IDS_KEY = "wakeCommentIds";
+/**
+ * Wake reason the platform stamps on the run it queues for a card's
+ * addressee when an issue-thread interaction is created (the `heartbeat
+ * .wakeup` call in `routes/issues.ts`). It lives here so the producer and
+ * every classifier below read one copy of the literal: a second copy in
+ * either file can drift and then change only one of the gates.
+ */
+export const INTERACTION_PENDING_WAKE_REASON = "interaction_pending";
 export const RESOLVED_INTERACTION_CONTINUATION_STATUSES = new Set([
   "accepted",
   "answered",
@@ -88,6 +96,26 @@ export function allowsIssueInteractionWake(
   const wakeReason = readNonEmptyString(contextSnapshot?.wakeReason);
   if (!wakeReason || !allowedWakeReasons.has(wakeReason)) return false;
   return Boolean(deriveCommentId(contextSnapshot));
+}
+
+/**
+ * True for the wake queued for a question card's addressee.
+ *
+ * Deliberately separate from `allowsIssueInteractionWake`. That helper also
+ * requires a derived comment id, and every one of its callers scopes the
+ * exception to human comment/mention wakes via
+ * ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS — including two bypasses of the
+ * dependency-blocked gate. A card addressee carries no comment id and is
+ * chosen by the card author, so widening that helper would silently hand
+ * interaction wakes two further exemptions nobody has reviewed.
+ *
+ * This predicate answers only the queued-run ownership question: the run's
+ * agent differs from the assignee by design, and the assignee never changed.
+ */
+export function isPendingInteractionWake(
+  contextSnapshot: Record<string, unknown> | null | undefined,
+): boolean {
+  return readNonEmptyString(contextSnapshot?.wakeReason) === INTERACTION_PENDING_WAKE_REASON;
 }
 
 export function isResolvedInteractionContinuationWakeContext(contextSnapshot: unknown): boolean {
