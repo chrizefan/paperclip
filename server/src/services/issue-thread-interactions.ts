@@ -96,6 +96,7 @@ import {
 } from "@paperclipai/shared";
 import { z } from "zod";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { assertNoSecretWrite } from "./secret-write-guard.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { authorizationService } from "./authorization.js";
 import { isCloudManagedInstance } from "./cloud-instance.js";
@@ -2603,6 +2604,10 @@ export function issueThreadInteractionService(
       },
     ) => {
       const payload = connectionIntentPayloadSchema.parse(input.payload);
+      // Refuse a secret before it is persisted. The generated title and summary
+      // are built from this payload, so scanning the payload covers all three
+      // stored columns.
+      await assertNoSecretWrite(db, [payload]);
       const existing = await getIdempotentInteraction({
         issueId: issue.id,
         companyId: issue.companyId,
@@ -3370,6 +3375,11 @@ export function issueThreadInteractionService(
       const data = normalizeCreateInteractionInput(
         createIssueThreadInteractionSchema.parse(input),
       );
+      // Refuse a secret before it is persisted. `create` is the single choke
+      // point every issue-thread interaction kind passes through, so one guard
+      // here covers the whole surface (questions, confirmations, verdicts,
+      // checkbox prompts and task suggestions alike).
+      await assertNoSecretWrite(db, [data.title, data.summary, data.payload]);
       // Chat ownership is server-owned and immutable. Ordinary human questions
       // must not depend on a model copying an opaque user identity correctly.
       let defaultAddresseeUserId: string | null = null;
