@@ -284,6 +284,39 @@ describeEmbeddedPostgres("PATCH /api/issues/:id reviewInteractionId", () => {
     expect(response.body.error).toEqual(expect.stringContaining("in_review"));
   });
 
+  it("rejects reviewInteractionId on an issue that is already in review even when the PATCH also says status in_review", async () => {
+    // The discriminating case for the guard's exact condition. Re-sending
+    // `status: "in_review"` to an issue that is already in review does NOT
+    // enter the review path: assertInReviewReviewPath returns null at its
+    // `existing.status === "in_review"` early return (server/src/routes/issues.ts
+    // :4463), so the field would be dropped behind a 200 with an empty changes
+    // map. A guard that only checks `updateFields.status !== "in_review"` lets
+    // this through, which is the whole fault. The review-entry transition is
+    // `existing.status !== "in_review" && updateFields.status === "in_review"`.
+    const company = await seedCompany("RID");
+    // `status: "in_review"` in updateFields makes this an agent work update,
+    // so the request needs a run for cross-issue attribution; otherwise the
+    // containment guard answers 403 before the reviewInteractionId guard.
+    const { issueId, runId } = await seedIssueWithRun({
+      companyId: company.companyId,
+      agentId: company.agentId,
+      identifier: "RID-3B",
+      status: "in_review",
+    });
+    const interactionId = await seedPendingConfirmation({
+      companyId: company.companyId,
+      issueId,
+      createdByAgentId: company.agentId,
+    });
+
+    const response = await request(app(agentActor(company.companyId, company.agentId, runId)))
+      .patch(`/api/issues/${issueId}`)
+      .send({ reviewInteractionId: interactionId, status: "in_review" });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(422);
+    expect(response.body.error).toEqual(expect.stringContaining("in_review"));
+  });
+
   it("rejects reviewInteractionId for a board actor the same way it does for an agent", async () => {
     const company = await seedCompany("RID");
     const issueId = await seedIssue({

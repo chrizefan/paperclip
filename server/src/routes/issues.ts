@@ -13391,6 +13391,20 @@ export function issueRoutes(
         }
       }
 
+      if (
+        requestedReviewInteractionId !== undefined &&
+        !(
+          existing.status !== "in_review" &&
+          updateFields.status === "in_review"
+        )
+      ) {
+        res.status(422).json({
+          error:
+            "reviewInteractionId requires the in_review transition: set status to in_review together with a pending request_confirmation or request_checkbox_confirmation interaction",
+        });
+        return;
+      }
+
       const reviewInteractionId = await assertInReviewReviewPath({
         existing,
         updateFields,
