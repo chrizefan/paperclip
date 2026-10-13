@@ -3279,10 +3279,20 @@ async function discardBranchLeftByContendedWorktreeCreate(
   } catch {
     return; // cannot prove it is unused
   }
+  // `-D`, not `-d`. The guards above already proved the ref carries nothing
+  // and no worktree uses it; git's lowercase form then applies a REACHABILITY
+  // heuristic and refuses a branch whose tip is not merged into HEAD. The
+  // residue is created at `baseRefSha`, which is a remote-tracking tip that can
+  // legitimately be ahead of whatever HEAD the shared checkout happens to sit
+  // on, so `-d` refuses there. The refusal is swallowed, the retry then meets
+  // `already exists`, the caller attaches, and the branch lands with no
+  // upstream tracking: the original defect, reintroduced quietly. Emptiness is
+  // the safety property this helper checks, not reachability.
   try {
-    await runGit(["branch", "-d", branchName], repoRoot);
+    await runGit(["branch", "-D", branchName], repoRoot);
   } catch {
-    // Best effort: the retry below re-reads git's own state either way.
+    // Still best effort: if even the force delete fails, the caller's ladder
+    // below sees the branch and behaves exactly as it did before this retry.
   }
 }
 
