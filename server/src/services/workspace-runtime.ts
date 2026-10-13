@@ -3645,11 +3645,15 @@ export async function realizeExecutionWorkspace(input: {
 
   let branchCreatedByRuntime = true;
   try {
-    // Under config contention git aborts before it leaves anything behind, so a
-    // retry starts from the same state. Should a future git version instead
-    // leave the branch or the worktree in place and then fail the config
-    // write, the retry reports `already exists` and the idempotent ladder
-    // below takes over - the two halves cover each other either way.
+    // git creates the branch ref FIRST and only then records upstream
+    // tracking, so when that config write loses the lock git exits non-zero
+    // with the branch ref in place and no worktree directory. That is the
+    // measured behaviour, not a hypothesis, so the retry below only makes
+    // sense after {@link discardBranchLeftByContendedWorktreeCreate} has
+    // dropped the leftover ref: re-running the identical argv with the ref
+    // still there fails with `already exists`, which the attach path below
+    // satisfies WITHOUT writing upstream tracking - the original defect,
+    // reintroduced quietly. Keep those two halves together.
     for (let attempt = 0; ; attempt += 1) {
       try {
         await recordGitOperation(input.recorder, {
