@@ -933,6 +933,13 @@ describe("realizeExecutionWorkspace", () => {
    * log is what lets a test tell "the retry ran" from "the first attempt
    * happened to succeed", and the per-branch counts are what make that
    * deterministic instead of timing-dependent.
+   *
+   * Each injected failure also leaves the residue REAL git leaves: the branch
+   * ref, created at the start point's sha, with no worktree directory and no
+   * upstream tracking. An injected failure that only printed stderr would leave
+   * nothing behind, and a test built on that shim would never reach
+   * `discardBranchLeftByContendedWorktreeCreate` - so its upstream-config
+   * assertion would pin the retry alone and the cleanup half would be untested.
    */
   async function installContentionShim(failuresByBranch: Record<string, number>, stderr: string) {
     const shimDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-git-shim-"));
@@ -961,6 +968,11 @@ describe("realizeExecutionWorkspace", () => {
         "  try { seen = Number.parseInt(fs.readFileSync(counterPath, 'utf8'), 10) || 0; } catch { seen = 0; }",
         "  if (seen < PLAN[args[3]]) {",
         '    fs.writeFileSync(counterPath, String(seen + 1));',
+        '    const startPoint = args[5];',
+        '    const resolved = spawnSync(REAL, ["rev-parse", "--verify", "--quiet", startPoint], { encoding: "utf8" });',
+        "    if (resolved.status === 0 && resolved.stdout) {",
+        '      spawnSync(REAL, ["update-ref", "refs/heads/" + args[3], resolved.stdout.trim()], { stdio: "inherit" });',
+        "    }",
         "    process.stderr.write(STDERR);",
         "    process.exit(255);",
         "  }",
@@ -1024,6 +1036,35 @@ describe("realizeExecutionWorkspace", () => {
       await expect(fs.stat(path.join(result.cwd, ".git"))).resolves.toBeTruthy();
       expect(await readGit(repoRoot, ["worktree", "list"])).toContain(result.cwd);
       expect(await shim.createAttempts(branch)).toBe(3);
+      expect(await branchUpstreamConfig(repoRoot, branch)).not.toBe("");
+    } finally {
+      shim.restore();
+    }
+  }, 30_000);
+
+  it("drops a contended create's branch ref even when HEAD cannot reach it", async () => {
+    const { repoRoot, sourceRepo, remotePath } = await createClonedRepoWithRemote();
+    // Advance the remote so `origin/master` names a commit this clone's HEAD
+    // does not contain. The residue ref is created at exactly that sha, and
+    // git's lowercase `branch -d` refuses any branch it cannot prove is merged
+    // into HEAD. The helper must force the delete: if it does not, the retry
+    // meets `already exists`, the caller attaches the branch, and the branch
+    // lands with no upstream tracking - the defect this retry exists to remove.
+    await advanceRemoteMaster(sourceRepo, remotePath, "advanced.txt");
+    const branch = "PAP-503-add-worktree-support";
+    const shim = await installContentionShim({ [branch]: 2 }, GIT_CONFIG_LOCK_STDERR);
+    try {
+      const result = await realizeExecutionWorkspace(worktreeRealizationInput(repoRoot, "PAP-503"));
+      // Precondition, stated so the case cannot pass for the wrong reason:
+      // the base ref really is unreachable from this clone's HEAD, which is
+      // what makes the lowercase delete refuse it.
+      await expect(
+        readGit(repoRoot, ["merge-base", "--is-ancestor", "origin/master", "HEAD"]),
+      ).rejects.toBeTruthy();
+      expect(await shim.createAttempts(branch)).toBe(3);
+      // An attach (rather than a create) sets this false, and leaves the
+      // branch without upstream tracking, so both halves detect the failure.
+      expect(result.branchCreatedByRuntime).toBe(true);
       expect(await branchUpstreamConfig(repoRoot, branch)).not.toBe("");
     } finally {
       shim.restore();
