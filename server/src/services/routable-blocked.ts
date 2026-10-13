@@ -1,4 +1,5 @@
 import type { IssueUnblockDescriptor } from "@paperclipai/shared";
+import { ISSUE_UNBLOCK_REQUESTED_WAKE_REASON } from "../modules/run-dispatch/index.js";
 
 export const ROUTABLE_BLOCKED_ROLLOUT_AT = new Date("2026-07-23T18:13:03.000Z");
 
@@ -25,10 +26,10 @@ export async function deliverAgentUnblockNotification(input: {
   wakeup: (agentId: string, options: {
     source: "automation";
     triggerDetail: "system";
-    reason: "issue_unblock_requested";
+    reason: typeof ISSUE_UNBLOCK_REQUESTED_WAKE_REASON;
     idempotencyKey: string;
     payload: { issueId: string; action: string };
-    contextSnapshot: { wakeReason: "issue_unblock_requested"; issueId: string; taskId: string };
+    contextSnapshot: { wakeReason: typeof ISSUE_UNBLOCK_REQUESTED_WAKE_REASON; issueId: string; taskId: string };
   }) => Promise<unknown>;
   markNotified: (notifiedAt: Date) => Promise<unknown>;
   now?: () => Date;
@@ -44,10 +45,10 @@ export async function deliverAgentUnblockNotification(input: {
   await input.wakeup(owner.agentId, {
     source: "automation",
     triggerDetail: "system",
-    reason: "issue_unblock_requested",
+    reason: ISSUE_UNBLOCK_REQUESTED_WAKE_REASON,
     idempotencyKey: `issue-unblock:${issue.id}:${issue.blockedTransitionAt.toISOString()}`,
     payload: { issueId: issue.id, action: issue.unblockDescriptor.action },
-    contextSnapshot: { wakeReason: "issue_unblock_requested", issueId: issue.id, taskId: issue.id },
+    contextSnapshot: { wakeReason: ISSUE_UNBLOCK_REQUESTED_WAKE_REASON, issueId: issue.id, taskId: issue.id },
   });
   await input.markNotified((input.now ?? (() => new Date()))());
   return true;

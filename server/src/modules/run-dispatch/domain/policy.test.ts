@@ -273,14 +273,20 @@ describe("decideQueuedRunStaleness", () => {
     });
   });
 
-  it("keeps a card-addressee wake as current ownership while a plain non-assignee wake stays a reassignment", () => {
+  it.each([
+    // A question card's addressee, picked by the card author (DIG-3326).
+    "a card-addressee wake",
+    // An unblock descriptor's owner, which an agent can only ever name as
+    // itself, and which is therefore never the assignee (DIG-3297).
+    "an unblock-owner wake",
+  ])("keeps %s as current ownership while a plain non-assignee wake stays a reassignment", (_name) => {
     const nonAssignee = { issueAssigneeAgentId: "agent-2" } satisfies Partial<QueuedRunFacts>;
 
-    // The defect: the addressee is not the assignee by design and the
+    // The defect: the woken agent is not the assignee by design and the
     // assignee never changed, so the queued run must not be cancelled.
     expect(
       decideQueuedRunStaleness(
-        { ...baseStalenessFacts(), ...nonAssignee, isPendingInteractionWake: true },
+        { ...baseStalenessFacts(), ...nonAssignee, isNonAssigneeByDesignWake: true },
         NOW,
       ),
     ).toEqual({ stale: false });
