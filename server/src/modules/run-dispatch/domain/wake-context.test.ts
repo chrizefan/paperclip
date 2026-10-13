@@ -3,8 +3,8 @@ import {
   allowsIssueInteractionWake,
   deriveCommentId,
   extractWakeCommentIds,
+  isNonAssigneeByDesignWake,
   isNonAssigneeWorkspaceBusyRetry,
-  isPendingInteractionWake,
   isResolvedInteractionContinuationWakeContext,
   WORKSPACE_BUSY_RETRY_REASON,
 } from "./wake-context.js";
@@ -62,15 +62,22 @@ describe("wake context", () => {
     expect(allowsIssueInteractionWake({ wakeReason: "issue_commented" }, allowed)).toBe(false);
   });
 
-  it("recognizes the card-addressee wake from the shape the platform persists, and only that", () => {
-    // The snapshot below is the one a live DIG-3326 addressee run actually
-    // carried: the persistence step narrows it to these six keys, so no other
-    // signal (no comment id, no interaction id) survives for a gate to read.
-    expect(isPendingInteractionWake({
+  it.each([
+    // A question card's addressee. Snapshot is the one a live DIG-3326
+    // addressee run actually carried: persistence narrows it to these six
+    // keys, so no other signal (no comment id, no interaction id) survives
+    // for a gate to read.
+    "interaction_pending",
+    // An unblock descriptor's owner. Snapshot is the one live run c49764a4
+    // carried on 2026-10-13T17:48:53Z, cancelled by this same guard on an
+    // issue (DIG-3297) whose assignee never changed.
+    "issue_unblock_requested",
+  ])("recognizes the %s wake from the shape the platform persists, and only that", (wakeReason) => {
+    expect(isNonAssigneeByDesignWake({
       issueId: "issue-1",
       taskId: "issue-1",
       taskKey: "DIG-3326",
-      wakeReason: "interaction_pending",
+      wakeReason,
       wakeSource: "automation",
       wakeTriggerDetail: "system",
     })).toBe(true);
@@ -84,11 +91,14 @@ describe("wake context", () => {
       { wakeReason: "issue_continuation_needed" },
       { wakeReason: "  interaction_pending  " },
       { wakeReason: "Interaction_Pending" },
+      { wakeReason: "  issue_unblock_requested  " },
+      { wakeReason: "issue_unblock" },
+      { wakeReason: "issue_unblock_requested_extra" },
       { wakeReason: "" },
       {},
       undefined,
     ]) {
-      expect(isPendingInteractionWake(context)).toBe(false);
+      expect(isNonAssigneeByDesignWake(context)).toBe(false);
     }
   });
 

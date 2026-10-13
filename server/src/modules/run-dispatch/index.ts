@@ -18,12 +18,14 @@ export {
   INTERACTION_CONTINUATION_INFRA_WAKE_REASON,
   WAKE_COMMENT_IDS_KEY,
   INTERACTION_PENDING_WAKE_REASON,
+  ISSUE_UNBLOCK_REQUESTED_WAKE_REASON,
+  NON_ASSIGNEE_BY_DESIGN_WAKE_REASONS,
   RESOLVED_INTERACTION_CONTINUATION_STATUSES,
   isNonAssigneeWorkspaceBusyRetry,
   extractWakeCommentIds,
   deriveCommentId,
   allowsIssueInteractionWake,
-  isPendingInteractionWake,
+  isNonAssigneeByDesignWake,
   isResolvedInteractionContinuationWakeContext,
 } from "./domain/wake-context.js";
 export type {

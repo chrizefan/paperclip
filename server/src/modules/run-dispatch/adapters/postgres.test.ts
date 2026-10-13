@@ -610,12 +610,19 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
       });
     });
 
-    it("keeps a card-addressee run queued on an issue it does not own", async () => {
+    it.each([
+      // A question card's addressee, picked by the card author.
+      "interaction_pending",
+      // An unblock descriptor's owner. An agent can only name itself as that
+      // owner, so it is never the assignee either.
+      "issue_unblock_requested",
+    ])("keeps a run queued on an issue it does not own (wake reason %s)", async (wakeReason) => {
       // Regression for DIG-3333: this run was cancelled with
-      // issue_assignee_changed before it could start, because the addressee of
-      // a question card is picked by the card author and is routinely not the
-      // assignee. The seed mirrors the reassignment case above exactly except
-      // for the wake reason, so the pair differs on one input.
+      // issue_assignee_changed before it could start, because the woken agent
+      // is chosen by whoever raised the card or set the descriptor and is
+      // routinely not the assignee. The seed mirrors the reassignment case
+      // above exactly except for the wake reason, so the pair differs on one
+      // input.
       const { companyId, agentId } = await seedCompanyAndAgent();
       const replacementAgentId = randomUUID();
       await seedAgent({ id: replacementAgentId, companyId, name: "ReplacementCoder" });
@@ -633,7 +640,7 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
         contextSnapshot: {
           issueId,
           taskId: issueId,
-          wakeReason: "interaction_pending",
+          wakeReason,
           wakeSource: "automation",
           wakeTriggerDetail: "system",
         },
