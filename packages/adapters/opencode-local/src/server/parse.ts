@@ -23,7 +23,15 @@ export function parseOpenCodeJsonl(stdout: string) {
   let sessionId: string | null = null;
   const messages: string[] = [];
   const errors: string[] = [];
+  const recoveredErrors: string[] = [];
   const toolErrors: string[] = [];
+  // An `error` frame is fatal only while no assistant output follows it. A transient
+  // transport fault (ECONNRESET, a dropped socket) surfaces as an error frame, but the
+  // run often carries on and finishes its work. Whether an error is fatal is therefore a
+  // property of the whole stream, not of any single frame: we track it as "did assistant
+  // output arrive after the most recent error". A later error frame re-arms the fatal
+  // state, so a run that dies mid-stream after producing partial output stays failed.
+  let outputAfterError = false;
   const usage = {
     inputTokens: 0,
     cachedInputTokens: 0,
@@ -46,7 +54,10 @@ export function parseOpenCodeJsonl(stdout: string) {
     if (type === "text") {
       const part = parseObject(event.part);
       const text = asString(part.text, "").trim();
-      if (text) messages.push(text);
+      if (text) {
+        messages.push(text);
+        if (errors.length > 0) outputAfterError = true;
+      }
       continue;
     }
 
@@ -58,6 +69,7 @@ export function parseOpenCodeJsonl(stdout: string) {
       usage.cachedInputTokens += asNumber(cache.read, 0);
       usage.outputTokens += asNumber(tokens.output, 0) + asNumber(tokens.reasoning, 0);
       costUsd += asNumber(part.cost, 0);
+      if (errors.length > 0) outputAfterError = true;
       continue;
     }
 
@@ -73,17 +85,24 @@ export function parseOpenCodeJsonl(stdout: string) {
 
     if (type === "error") {
       const text = errorText(event.error ?? event.message).trim();
-      if (text) errors.push(text);
+      if (text) {
+        errors.push(text);
+        // A fresh error after recovered output is the last word: re-arm the fatal state.
+        outputAfterError = false;
+      }
       continue;
     }
   }
+
+  if (outputAfterError) recoveredErrors.push(...errors);
 
   return {
     sessionId,
     summary: messages.join("\n\n").trim(),
     usage,
     costUsd,
-    errorMessage: errors.length > 0 ? errors.join("\n") : null,
+    errorMessage: errors.length > 0 && !outputAfterError ? errors.join("\n") : null,
+    recoveredErrors,
     toolErrors,
   };
 }

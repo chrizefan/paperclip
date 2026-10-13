@@ -69,6 +69,101 @@ describe("parseOpenCodeJsonl", () => {
     expect(parsed.toolErrors).toEqual(["File not found: e2b-adapter-result.txt"]);
   });
 
+  it("does not fail a run that produced output after an error frame", () => {
+    const econnreset =
+      "Connection lost while reading the response: ECONNRESET: The socket connection was closed unexpectedly.";
+    const stdout = [
+      JSON.stringify({ type: "step_start", sessionID: "session_123", part: {} }),
+      JSON.stringify({
+        type: "error",
+        sessionID: "session_123",
+        error: { message: econnreset },
+      }),
+      JSON.stringify({ type: "step_start", sessionID: "session_123", part: {} }),
+      JSON.stringify({
+        type: "text",
+        sessionID: "session_123",
+        part: { text: "Recovered after the socket dropped and finished the task" },
+      }),
+      JSON.stringify({
+        type: "step_finish",
+        sessionID: "session_123",
+        part: { reason: "done", cost: 0.001, tokens: { input: 10, output: 5, cache: {} } },
+      }),
+    ].join("\n");
+
+    const parsed = parseOpenCodeJsonl(stdout);
+    expect(parsed.errorMessage).toBeNull();
+    expect(parsed.summary).toBe("Recovered after the socket dropped and finished the task");
+    expect(parsed.recoveredErrors).toEqual([econnreset]);
+    expect(parsed.toolErrors).toEqual([]);
+  });
+
+  it("keeps a trailing error fatal after partial output", () => {
+    // Deliberately not "the error frame is last" in general: a run that emits a partial
+    // answer and then dies still lost its work, so the last error outranks earlier output.
+    const stdout = [
+      JSON.stringify({
+        type: "text",
+        sessionID: "session_123",
+        part: { text: "Partial answer: the invoice now waits on exactly two" },
+      }),
+      JSON.stringify({
+        type: "error",
+        sessionID: "session_123",
+        error: { message: "Connection lost while reading the response: ECONNRESET" },
+      }),
+    ].join("\n");
+
+    const parsed = parseOpenCodeJsonl(stdout);
+    expect(parsed.errorMessage).toContain("ECONNRESET");
+    expect(parsed.recoveredErrors).toEqual([]);
+  });
+
+  it("treats the last error as fatal when the run errors again after recovering", () => {
+    const stdout = [
+      JSON.stringify({
+        type: "error",
+        sessionID: "session_123",
+        error: { message: "first ECONNRESET" },
+      }),
+      JSON.stringify({
+        type: "text",
+        sessionID: "session_123",
+        part: { text: "Back up and retrying" },
+      }),
+      JSON.stringify({
+        type: "error",
+        sessionID: "session_123",
+        error: { message: "second ECONNRESET" },
+      }),
+    ].join("\n");
+
+    const parsed = parseOpenCodeJsonl(stdout);
+    expect(parsed.errorMessage).toContain("second ECONNRESET");
+    expect(parsed.summary).toBe("Back up and retrying");
+    expect(parsed.recoveredErrors).toEqual([]);
+  });
+
+  it("stays fatal when the run opens a step after an error and then dies", () => {
+    // This is the case that rules out the tempting one-liner ("the last frame is not an
+    // error, so the run recovered"). A step_start is neither assistant output nor
+    // completion: the run errored and then died without producing a result.
+    const stdout = [
+      JSON.stringify({
+        type: "error",
+        sessionID: "session_123",
+        error: { message: "Connection lost while reading the response: ECONNRESET" },
+      }),
+      JSON.stringify({ type: "step_start", sessionID: "session_123", part: {} }),
+    ].join("\n");
+
+    const parsed = parseOpenCodeJsonl(stdout);
+    expect(parsed.errorMessage).toContain("ECONNRESET");
+    expect(parsed.summary).toBe("");
+    expect(parsed.recoveredErrors).toEqual([]);
+  });
+
   it("detects unknown session errors", () => {
     expect(isOpenCodeUnknownSessionError("Session not found: s_123", "")).toBe(true);
     expect(isOpenCodeUnknownSessionError("", "unknown session id")).toBe(true);
