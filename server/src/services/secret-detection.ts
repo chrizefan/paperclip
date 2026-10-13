@@ -178,3 +178,44 @@ export function detectSecret(text: string, options: DetectSecretOptions = {}): S
 export function containsSecret(text: string, options: DetectSecretOptions = {}): boolean {
   return detectSecret(text, options) !== null;
 }
+
+/**
+ * Serialize one persisted field to the bytes the column will hold. Strings pass
+ * through unchanged; anything else (a jsonb column such as an interaction
+ * payload or work-product metadata) is JSON-encoded so it is scanned as the
+ * stored text rather than as the literal `"[object Object]"`. A value that
+ * cannot be encoded is skipped rather than throwing: the guard must not become
+ * an outage on a payload the writer was going to persist anyway.
+ */
+function scanTextForField(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scan several persisted fields of one write as a single payload, in field
+ * order, and return the first match. Field order makes the reported rule
+ * deterministic for a payload that trips more than one rule.
+ *
+ * Callers must pass the values they are about to persist; this never inspects a
+ * value the write will not store.
+ */
+export function detectSecretInFields(
+  fields: readonly unknown[],
+  options: DetectSecretOptions = {},
+): SecretMatch | null {
+  if (options.enabled === false) return null;
+  for (const field of fields) {
+    const text = scanTextForField(field);
+    if (text === null) continue;
+    const match = detectSecret(text, options);
+    if (match) return match;
+  }
+  return null;
+}

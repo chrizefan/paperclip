@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { executionWorkspaces, heartbeatRunEvents, issueWorkProducts, workspaceRuntimeServices } from "@paperclipai/db";
 import type { IssueWorkProduct } from "@paperclipai/shared";
 import { unprocessable } from "../errors.js";
+import { assertNoSecretWrite } from "./secret-write-guard.js";
 import { insertRowsInChunks } from "./batch-insert.js";
 import {
   createPullRequestMergeDetailsResolver,
@@ -269,6 +270,19 @@ export function workProductService(
     },
 
     createForIssue: async (issueId: string, companyId: string, data: Omit<typeof issueWorkProducts.$inferInsert, "issueId" | "companyId">) => {
+      await assertNoSecretWrite(db, [
+        data.type,
+        data.provider,
+        data.externalId,
+        data.title,
+        data.url,
+        data.status,
+        data.reviewState,
+        data.healthStatus,
+        data.summary,
+        data.metadata,
+        data.sourceTrust,
+      ]);
       const row = await db.transaction(async (tx) => {
         await validateExecutionWorkspace(tx, companyId, data.executionWorkspaceId);
         if (data.isPrimary) {
@@ -297,6 +311,21 @@ export function workProductService(
     },
 
     update: async (id: string, patch: Partial<typeof issueWorkProducts.$inferInsert>) => {
+      // A patch may rewrite any stored column, so scan the whole patch rather
+      // than only the fields a caller happens to set on this call.
+      await assertNoSecretWrite(db, [
+        patch.type,
+        patch.provider,
+        patch.externalId,
+        patch.title,
+        patch.url,
+        patch.status,
+        patch.reviewState,
+        patch.healthStatus,
+        patch.summary,
+        patch.metadata,
+        patch.sourceTrust,
+      ]);
       const row = await db.transaction(async (tx) => {
         const existing = await tx
           .select()
@@ -340,6 +369,25 @@ export function workProductService(
      */
     createManyForImport: async (rows: ImportIssueWorkProductRow[]): Promise<void> => {
       if (rows.length === 0) return;
+      // The import writes many rows in one statement, so scan every row's free
+      // text and json before any of them is inserted: one refused row must not
+      // leave the batch half-written.
+      await assertNoSecretWrite(
+        db,
+        rows.flatMap((row) => [
+          row.type,
+          row.provider,
+          row.externalId,
+          row.title,
+          row.url,
+          row.status,
+          row.reviewState,
+          row.healthStatus,
+          row.summary,
+          row.metadata,
+          row.sourceTrust,
+        ]),
+      );
       const lastPrimaryIndexByGroup = new Map<string, number>();
       rows.forEach((row, index) => {
         if (row.isPrimary) lastPrimaryIndexByGroup.set(`${row.issueId}:${row.type}`, index);

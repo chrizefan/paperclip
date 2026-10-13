@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { documentRevisions, documents, issueDocuments, issues } from "@paperclipai/db";
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
+import { assertNoSecretWrite } from "./secret-write-guard.js";
 import { isUniqueViolation } from "../db-errors.js";
 import { insertRowsInChunks } from "./batch-insert.js";
 import type { ImportIssueDocumentRow } from "./import-write-types.js";
@@ -215,6 +216,16 @@ export function documentService(db: Db) {
         .where(eq(issues.id, input.issueId))
         .then((rows) => rows[0] ?? null);
       if (!issue) throw notFound("Issue not found");
+
+      // Refuse a secret before it is persisted. This method is the single
+      // choke point for every issue-document write: the create path and each
+      // conflict-retry path below insert through it, so one guard here covers
+      // every stored revision of this key.
+      await assertNoSecretWrite(db, [
+        input.title,
+        input.body,
+        input.changeSummary,
+      ]);
 
       const maxAttempts = input.lockedDocumentStrategy === "create_new_document" ? 3 : 1;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
