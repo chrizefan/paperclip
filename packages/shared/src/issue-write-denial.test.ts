@@ -80,10 +80,18 @@ describe("describeIssueWriteDenial", () => {
     expect(copy.description).not.toContain("attempt");
   });
 
-  it("gives the run-context denial a copy-pasteable fix", () => {
+  it("tells the run-context denial both how to retry and when retrying cannot work", () => {
     const copy = describeIssueWriteDenial("cross_issue_influence_run_context_required");
+    // Arms 1 and 2 (malformed header, or a run row that is not this actor's) are repairable,
+    // so the header advice must survive.
     expect(copy.sanctionedPath).toContain("X-Paperclip-Run-Id");
     expect(copy.sanctionedPath).toContain("PAPERCLIP_RUN_ID");
+    // Arm 3 (the run row carries no issue id) is NOT repairable by any header value: the
+    // header only selects which run row is read, and that row has no issue. DIG-502.
+    expect(copy.sanctionedPath).toContain("no header can contain it");
+    expect(copy.description).toContain("bound to an assigned issue");
+    // The who-can-act line must stop implying the run id alone is sufficient.
+    expect(copy.whoCanAct).not.toContain("once the request carries its own run id");
   });
 
   it("tells a spoof attempt that the write itself was fine", () => {
