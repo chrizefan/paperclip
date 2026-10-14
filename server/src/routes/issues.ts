@@ -13416,6 +13416,13 @@ export function issueRoutes(
       const assigneeWillChange =
         nextAssigneeAgentId !== existing.assigneeAgentId ||
         nextAssigneeUserId !== existing.assigneeUserId;
+      // A mid-work run belongs to the AGENT assignee, so only an agent-side
+      // change invalidates it. A user-side (human owner) change leaves the
+      // agent owner's work valid and must not stop the running run
+      // (DIG-3520: 12 mid-work cancels on DIG-938 with the agent assignee
+      // unchanged on every read).
+      const agentAssigneeWillChange =
+        nextAssigneeAgentId !== existing.assigneeAgentId;
       const isAgentReturningIssueToCreator =
         req.actor.type === "agent" &&
         !!req.actor.agentId &&
@@ -13458,7 +13465,7 @@ export function issueRoutes(
       // Only this request may finish a mutation that intentionally stops its
       // own run (for example handing work to a signoff reviewer).
       const issueMutationStopId = randomUUID();
-      if (assigneeWillChange && existing.assigneeAgentId) {
+      if (agentAssigneeWillChange && existing.assigneeAgentId) {
         await stopRunnerGoalForOwnershipChange({
           companyId: existing.companyId,
           issueId: existing.id,
@@ -13471,7 +13478,17 @@ export function issueRoutes(
             "Cancelled before issue reassignment",
             {
               errorCode: "issue_reassigned",
-              resultJson: { reassignmentStopConfirmed: true, issueMutationStopId },
+              resultJson: {
+                reassignmentStopConfirmed: true,
+                issueMutationStopId,
+                // Writer identity: without this the run row names no caller
+                // and a mid-work cancel is unattributable (DIG-3520).
+                cancelledByActorType: actor.actorType,
+                cancelledByAgentId: actor.agentId ?? null,
+                cancelledByUserId:
+                  actor.actorType === "user" ? actor.actorId : null,
+                cancelledByRunId: actor.runId ?? null,
+              },
               eventMessage: "run cancelled before issue reassignment",
               eventPayload: { issueId: existing.id },
             },
