@@ -106,6 +106,28 @@ const HIGH_ENTROPY_BASE64 =
 const MIN_BASE64_ENTROPY_BITS_PER_CHAR = 3.5;
 const MAX_PRINTABLE_DECODED_RATIO = 0.85;
 
+/**
+ * Identifier shapes that are addressing, not credentials. A single UUID, git
+ * SHA or sha256 never reaches the 80-character high-entropy threshold on its
+ * own — but system comments embed several of them in one markdown link
+ * (`[run](.../agents/<uuid>/runs/<uuid>)`), and the `/` and `-` joining them
+ * are both in the base64url alphabet, so the joined path reads as one 80+
+ * run. Mask them (length-preserving, so positions are stable) before the
+ * high-entropy scans. Boundaries keep a longer hex run intact: masking can
+ * never shorten a real 128-hex token below the threshold.
+ */
+const UUID_SHAPE =
+  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+const STANDALONE_HEX_64 = /(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])/g;
+const STANDALONE_HEX_40 = /(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])/g;
+
+function maskBenignIdentifiers(text: string): string {
+  return text
+    .replace(UUID_SHAPE, (m) => " ".repeat(m.length))
+    .replace(STANDALONE_HEX_64, (m) => " ".repeat(m.length))
+    .replace(STANDALONE_HEX_40, (m) => " ".repeat(m.length));
+}
+
 /** Shannon entropy, in bits per character, of a short string. */
 function shannonEntropy(value: string): number {
   const counts = new Map<string, number>();
@@ -160,11 +182,17 @@ export function detectSecret(text: string, options: DetectSecretOptions = {}): S
     }
   }
 
-  for (const match of text.matchAll(HIGH_ENTROPY_HEX)) {
-    return { rule: "high_entropy_hex", fingerprint: fingerprintSecret(match[1]!) };
+  const scannable = maskBenignIdentifiers(text);
+  for (const match of scannable.matchAll(HIGH_ENTROPY_HEX)) {
+    const value = match[1]!;
+    // A repeated digit run (e.g. synthetic "0123456789" fixtures) is long
+    // but low-entropy; a real opaque hex token is uniformly random (~4 bits
+    // per char). Same threshold as the base64 arm below.
+    if (shannonEntropy(value) < MIN_BASE64_ENTROPY_BITS_PER_CHAR) continue;
+    return { rule: "high_entropy_hex", fingerprint: fingerprintSecret(value) };
   }
 
-  for (const match of text.matchAll(HIGH_ENTROPY_BASE64)) {
+  for (const match of scannable.matchAll(HIGH_ENTROPY_BASE64)) {
     const value = match[1]!;
     if (decodesToPrintableText(value)) continue;
     if (shannonEntropy(value) < MIN_BASE64_ENTROPY_BITS_PER_CHAR) continue;
