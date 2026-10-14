@@ -106,6 +106,7 @@ function defaultExperimentalSettings(): InstanceExperimentalSettingsPayload {
     enableWorkspaceBranchReconcileForward: true,
     enableWorkspaceDirtyQuarantineRepair: true,
     enableOwnerInstanceAdmin: false,
+    enableSecretWriteDetection: true,
     enableSandboxDuplexBridge: false,
     enableRunnerPreviewIngress: false,
     enableWorktreeRunExecution: false,
