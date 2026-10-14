@@ -103,6 +103,12 @@ function inferMode(issue: IssueSummaryInput, run: RunSummaryInput) {
 function inferNextAction(issue: IssueSummaryInput, run: RunSummaryInput, previousNextAction: string | null) {
   if (issue.status === "done") return "Review the completed issue output and close any remaining follow-up comments.";
   if (issue.status === "in_review") return "Wait for reviewer feedback or approval before continuing executor work.";
+  // DIG-3097: an authored "I am deliberately waiting" next action must survive a
+  // terminal run. The failed/timed_out/cancelled branches below return before the
+  // previousNextAction passthrough, which discarded it. A parked executor then read
+  // as one that had been told to keep working, and the missing-disposition loop
+  // fired again on every continuation.
+  if (previousNextAction && nextActionParksExecutor(previousNextAction)) return previousNextAction;
   if (run.status === "failed" || run.status === "timed_out") {
     return "Inspect the failed run, fix the cause, and resume from the most recent concrete action above.";
   }
@@ -128,10 +134,13 @@ export function extractContinuationSummaryNextAction(body: string | null | undef
   return extractPreviousNextAction(body);
 }
 
-export function continuationSummaryParksExecutor(body: string | null | undefined) {
-  const nextAction = extractContinuationSummaryNextAction(body);
+function nextActionParksExecutor(nextAction: string | null | undefined) {
   if (!nextAction) return false;
   return WAITING_FOR_REVIEW_OR_APPROVAL_RE.test(nextAction);
+}
+
+export function continuationSummaryParksExecutor(body: string | null | undefined) {
+  return nextActionParksExecutor(extractContinuationSummaryNextAction(body));
 }
 
 export function buildContinuationSummaryMarkdown(input: {
