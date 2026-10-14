@@ -6074,6 +6074,14 @@ export function agentRoutes(
           (await getExecutionBlocker(db, agent.companyId, issueId))?.runId !== failedRun.id)) {
         throw conflict("The stopped run no longer owns this task's recovery hold.");
       }
+      // A retry that cannot be attributed to a task would mint an equally unbound
+      // run: it can report a hollow success while the stranded issue stays
+      // stranded and nothing errors anywhere (DIG-2091). Refuse it instead.
+      if (!issueId) {
+        throw conflict("retry_failed_run_unbound_recovery", {
+          code: "retry_failed_run_unbound_recovery",
+        });
+      }
       if (issueId) {
         const issue = await issueService(db).getById(issueId);
         if (!issue || issue.companyId !== agent.companyId) throw notFound("Task not found");

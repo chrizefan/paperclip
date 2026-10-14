@@ -1020,6 +1020,27 @@ describe("agent live run routes", () => {
       expect(mockChatRunRetries.prepareFailedChatRunRetry).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ["an absent issueId key", {}],
+      ["a non-string issueId", { issueId: 42 }],
+      ["an empty-string issueId", { issueId: "" }],
+    ])("refuses a failed-run retry with %s instead of minting an unbound run", async (_label, contextSnapshot) => {
+      const fixture = createFailedChatRetryDb(false);
+      mockHeartbeatService.getRun.mockResolvedValue({ ...selectedRun, contextSnapshot });
+      const res = await requestApp(await createApp(fixture.db, {
+        type: "board", userId: "operator", source: "session", companyIds: ["company-1"],
+      }), url => request(url).post(`/api/agents/${routeAgentId}/wakeup`).send(retryBody));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+      expect(res.body).toMatchObject({
+        error: expect.stringContaining("retry_failed_run_unbound_recovery"),
+      });
+      // The defect is the hollow success: an unbound run that reports success while
+      // the stranded issue stays stranded. Nothing may be dispatched.
+      expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+      expect(mockChatRunRetries.prepareFailedChatRunRetry).not.toHaveBeenCalled();
+    });
+
     it("retries a task for an operator without agent-creation permission", async () => {
       const fixture = createFailedChatRetryDb(false);
       mockHeartbeatService.getRun.mockResolvedValue({ ...selectedRun, contextSnapshot: {
