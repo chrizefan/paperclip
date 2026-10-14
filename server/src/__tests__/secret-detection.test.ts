@@ -99,6 +99,31 @@ describe("detectSecret false positives", () => {
     expect(detectSecret("id 123e4567-e89b-12d3-a456-426614174000 here")).toBeNull();
   });
 
+  it("passes several UUIDs joined by slashes in one markdown link", () => {
+    // System recovery comments link runs as [id](.../agents/<uuid>/runs/<uuid>).
+    // The joining `/` and `-` are in the base64url alphabet, so without
+    // identifier masking the path reads as one 80+ high-entropy run.
+    const runId = "123e4567-e89b-12d3-a456-426614174000";
+    const agentId = "223e4567-e89b-12d3-a456-426614174001";
+    expect(
+      detectSecret(`- Latest run: [${runId}](/TST/agents/${agentId}/runs/${runId})`),
+    ).toBeNull();
+  });
+
+  it("passes a 40-hex SHA next to a 64-hex sha256", () => {
+    expect(
+      detectSecret(
+        "commit 0123456789abcdef0123456789abcdef01234567 sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      ),
+    ).toBeNull();
+  });
+
+  it("still reports a 128-hex token beside UUIDs", () => {
+    const token = randomBytes(64).toString("hex");
+    expect(token).toHaveLength(128);
+    expectRule(`run 123e4567-e89b-12d3-a456-426614174000 token ${token}`, "high_entropy_hex");
+  });
+
   it("passes base64 of prose", () => {
     const encoded = Buffer.from(
       "The quick brown fox jumps over the lazy dog. This is a plain sentence.",
