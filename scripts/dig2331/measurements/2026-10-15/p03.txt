@@ -1,0 +1,6 @@
+removed site line 3009 (guard 'updated' #2)
+added   site into block of line 3308 (guard 'updated' #10)
+sites in original 65, in counterfactual 65
+guard 'updated': original 15, counterfactual 15
+/private/var/folders/36/1mwn8lfs7qx58560qsmy12xw0000gn/T/paperclip-run-dig-2331-a955fc46-d7c-s94eZZ/opencode/mutants/counterfactual-a-removed-one.js
+/private/var/folders/36/1mwn8lfs7qx58560qsmy12xw0000gn/T/paperclip-run-dig-2331-a955fc46-d7c-s94eZZ/opencode/mutants/counterfactual-b-count-preserving.js

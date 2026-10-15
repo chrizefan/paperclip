@@ -1,0 +1,24 @@
+source            : /Users/chrisstefan/Code/wt-dig2331-anchor/server/src/services/recovery/service.ts
+dist              : /private/var/folders/36/1mwn8lfs7qx58560qsmy12xw0000gn/T/paperclip-run-dig-2331-a955fc46-d7c-s94eZZ/opencode/trees/new/package/dist/services/recovery/service.js
+skip sites        : source 65 / dist 71
+placements        : 61
+dropped (source)  : 4
+new (dist)        : 10
+content-proven    : 28
+order-resolved    : 33
+FATAL: skip-site count changed: 65 anchored, 71 installed
+FATAL: unplaced source site at line 3383: guard `requiresExecutionReconciliation(action.cause)` has 1 source occurrence(s) and 0 dist occurrence(s)
+FATAL: unplaced source site at line 4956: guard `queued` has 6 source occurrence(s) and 3 dist occurrence(s)
+FATAL: unplaced source site at line 5073: guard `queued` has 6 source occurrence(s) and 3 dist occurrence(s)
+FATAL: unplaced source site at line 5190: guard `queued` has 6 source occurrence(s) and 3 dist occurrence(s)
+FATAL: unplaced dist site at line 3811: guard `updated` has no source partner at this build
+FATAL: unplaced dist site at line 3836: guard `updated` has no source partner at this build
+FATAL: unplaced dist site at line 3894: guard `updated` has no source partner at this build
+FATAL: unplaced dist site at line 3852: guard `await isInvocationBudgetBlocked(issue,agentId)` has no source partner at this build
+FATAL: unplaced dist site at line 2218: guard `requiresExecutionReconciliation(action.cause)||isNativeWorkspaceExportRepairCause(action.cause)||action.cause==="native_workspace_sync_out_unsafe_archive"` has no source partner at this build
+FATAL: unplaced dist site at line 2953: guard `current?.externalConversationState==="waiting"` has no source partner at this build
+FATAL: unplaced dist site at line 3028: guard `source?.runtimeMode!=="native"` has no source partner at this build
+FATAL: unplaced dist site at line 3517: guard `reviewOutcome.retryExhausted&&!(await hasActiveExecutionPath(issue.companyId,issue.id,null))` has no source partner at this build
+FATAL: unplaced dist site at line 3624: guard `dispatchOutcome.retryExhausted&&!(await hasActiveExecutionPath(issue.companyId,issue.id,null))` has no source partner at this build
+FATAL: unplaced dist site at line 3898: guard `recoveryOutcome.retryExhausted&&!(await hasActiveExecutionPath(issue.companyId,issue.id,null))` has no source partner at this build
+REFUSING: 15 fatal condition(s); no patch produced.

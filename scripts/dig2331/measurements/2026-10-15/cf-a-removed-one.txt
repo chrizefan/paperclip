@@ -1,0 +1,11 @@
+source            : /Users/chrisstefan/Code/wt-dig2331-anchor/server/src/services/recovery/service.ts
+dist              : /private/var/folders/36/1mwn8lfs7qx58560qsmy12xw0000gn/T/paperclip-run-dig-2331-a955fc46-d7c-s94eZZ/opencode/mutants/counterfactual-a-removed-one.js
+skip sites        : source 65 / dist 64
+placements        : 64
+dropped (source)  : 1
+new (dist)        : 0
+content-proven    : 29
+order-resolved    : 35
+FATAL: skip-site count changed: 65 anchored, 64 installed
+FATAL: unplaced source site at line 5155: guard `updated` has 15 source occurrence(s) and 14 dist occurrence(s)
+REFUSING: 2 fatal condition(s); no patch produced.
