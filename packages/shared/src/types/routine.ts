@@ -76,6 +76,7 @@ export interface Routine {
   folderId?: string | null;
   goalId: string | null;
   parentIssueId: string | null;
+  standingIssueId?: string | null;
   title: string;
   description: string | null;
   assigneeAgentId: string | null;
