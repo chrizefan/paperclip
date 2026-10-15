@@ -59,6 +59,16 @@ vi.mock("../services/runner-goals.js", () => ({
   RunnerGoalConflictError: class RunnerGoalConflictError extends Error {},
 }));
 
+// The route reads experimental flags from this module directly, not through the
+// services index mocked below, and the db here is a mock with no settings table.
+vi.mock("../services/instance-settings.js", () => ({
+  instanceSettingsService: () => ({
+    get: vi.fn(async () => ({ id: "instance-settings-1", general: {}, experimental: {} })),
+    getExperimental: vi.fn(async () => ({ enableSecretWriteDetection: true })),
+    listCompanyIds: vi.fn(async () => ["company-1"]),
+  }),
+}));
+
 vi.mock("../services/index.js", () => ({
   companyService: () => ({
     getById: vi.fn(async () => ({ id: "company-1" })),
