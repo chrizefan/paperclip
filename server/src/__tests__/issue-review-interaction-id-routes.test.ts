@@ -262,6 +262,25 @@ describeEmbeddedPostgres("PATCH /api/issues/:id reviewInteractionId", () => {
     expect(response.body.error).toEqual(expect.stringContaining("in_review"));
   });
 
+  it("rejects a null reviewInteractionId at validation, before the transition check", async () => {
+    const company = await seedCompany("RID");
+    const { issueId, runId } = await seedIssueWithRun({
+      companyId: company.companyId,
+      agentId: company.agentId,
+      identifier: "RID-N",
+    });
+
+    const response = await request(app(agentActor(company.companyId, company.agentId, runId)))
+      .patch(`/api/issues/${issueId}`)
+      .send({ reviewInteractionId: null, title: "Renamed by a null id" });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(400);
+    const issue = await request(app(boardActor(company.companyId, company.operatorUserId)))
+      .get(`/api/issues/${issueId}`)
+      .then((res) => res.body);
+    expect(issue.title).toBe("RID-N");
+  });
+
   it("rejects reviewInteractionId on an issue that is already in review", async () => {
     const company = await seedCompany("RID");
     const issueId = await seedIssue({
