@@ -8,6 +8,7 @@ import {
   companies,
   createDb,
   heartbeatRuns,
+  issueRecoveryActions,
   issueRelations,
   issues,
   projects,
@@ -193,6 +194,7 @@ describeEmbeddedPostgres("issue blocker diagnostics route", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(issueRecoveryActions);
     await db.delete(issueRelations);
     await db.delete(heartbeatRuns);
     await db.delete(issues);
@@ -387,5 +389,56 @@ describeEmbeddedPostgres("issue blocker diagnostics route", () => {
     expect(res.body.omittedUnauthorizedBlockerCount).toBeNull();
     expect(res.body.diagnosis).toContain("truncated at 100 blockers");
     expect(res.body.caps).toEqual({ maxBlockers: 100 });
+  });
+
+  it("surfaces a non-null execution blocker as an unresolved blocker row", async () => {
+    const company = await seedCompany(db);
+    const agent = await seedAgent(db, company.id);
+    const project = await seedProject(db, company.id, "Core");
+    const issue = await seedIssue(db, {
+      companyId: company.id,
+      projectId: project.id,
+      title: "Blocked on execution reconciliation",
+      status: "blocked",
+      assigneeAgentId: agent.id,
+    });
+    const [run] = await db.insert(heartbeatRuns).values({
+      companyId: company.id,
+      agentId: agent.id,
+      status: "cancelled",
+      contextSnapshot: { issueId: issue.id },
+    }).returning();
+    const [action] = await db.insert(issueRecoveryActions).values({
+      companyId: company.id,
+      sourceIssueId: issue.id,
+      kind: "active_run_watchdog",
+      ownerType: "board",
+      cause: "legacy_execution_requires_reconciliation",
+      status: "active",
+      evidence: {
+        runId: run!.id,
+        automaticRecovery: { replay: "blocked", actionOutcome: "unknown" },
+      },
+      fingerprint: run!.id,
+      nextAction: "Automatic recovery stopped. Recorded work is preserved.",
+    }).returning();
+
+    const res = await request(createApp(db, boardActor(company)))
+      .get(`/api/issues/${issue.id}/diagnostics/blockers`);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.readiness).toMatchObject({ unresolvedBlockerCount: 1 });
+    expect(res.body.readiness.isDependencyReady).toBe(false);
+    expect(res.body.readiness.allBlockersDone).toBe(false);
+    expect(res.body.blockers).toHaveLength(1);
+    expect(res.body.blockers[0]).toMatchObject({
+      id: action!.id,
+      isUnresolved: true,
+      isDependencyReady: false,
+    });
+    expect(res.body.blockers[0].title).toContain(
+      "legacy_execution_requires_reconciliation",
+    );
+    expect(res.body.diagnosis).not.toContain("no first-class blocker relations");
   });
 });

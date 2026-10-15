@@ -1265,6 +1265,10 @@ function buildIssueBlockerDiagnosticsResponse(input: {
   };
   truncated: boolean;
   maxBlockers?: number;
+  executionBlocker?: {
+    recoveryActionId: string | null;
+    cause: string;
+  } | null;
 }): IssueBlockerDiagnosticsResponse {
   const issue = toIssueBlockerDiagnosticSummary(input.issue);
   const visibleBlockerIds = new Set(
@@ -1302,12 +1306,40 @@ function buildIssueBlockerDiagnosticsResponse(input: {
     },
   );
 
+  const executionBlockerId = input.executionBlocker
+    ? (input.executionBlocker.recoveryActionId ??
+      `execution-blocker:${input.issue.id}`)
+    : null;
+  if (input.executionBlocker && executionBlockerId) {
+    unresolvedIds.add(executionBlockerId);
+    blockers.push({
+      id: executionBlockerId,
+      identifier: null,
+      title: `Execution blocker: ${input.executionBlocker.cause}`,
+      status: "blocked",
+      priority:
+        input.issue.priority as IssueBlockerDiagnosticIssueSummary["priority"],
+      assigneeAgentId: null,
+      assigneeUserId: null,
+      isUnresolved: true,
+      isPendingFinalize: false,
+      isDependencyReady: false,
+      flags: [],
+    });
+  }
+
+  const hasExecutionBlocker = Boolean(
+    input.executionBlocker && executionBlockerId,
+  );
   const readiness: IssueBlockerDiagnosticsReadiness | null = completeVisibleSet
     ? {
-        allBlockersDone: input.readiness.allBlockersDone,
-        isDependencyReady: input.readiness.isDependencyReady,
+        allBlockersDone:
+          input.readiness.allBlockersDone && !hasExecutionBlocker,
+        isDependencyReady:
+          input.readiness.isDependencyReady && !hasExecutionBlocker,
         unresolvedBlockerCount:
-          input.readiness.unresolvedBlockerIssueIds.length,
+          input.readiness.unresolvedBlockerIssueIds.length +
+          (hasExecutionBlocker ? 1 : 0),
         pendingFinalizeBlockerCount:
           input.readiness.pendingFinalizeBlockerIssueIds.length,
       }
@@ -8687,7 +8719,10 @@ export function issueRoutes(
     if (!issue) return;
     if (!(await assertIssueReadAllowed(req, res, issue))) return;
 
-    const diagnostic = await svc.getBlockerDiagnostics(issue.id);
+    const [diagnostic, executionBlocker] = await Promise.all([
+      svc.getBlockerDiagnostics(issue.id),
+      getExecutionBlocker(db, issue.companyId, issue.id),
+    ]);
     const visibleBlockers = await filterIssuesForActor(
       req,
       diagnostic.blockers,
@@ -8698,6 +8733,7 @@ export function issueRoutes(
       visibleBlockers,
       readiness: diagnostic.readiness,
       truncated: diagnostic.truncated,
+      executionBlocker,
     });
 
     logger.info(
@@ -8727,11 +8763,12 @@ export function issueRoutes(
     if (!issue) return;
     if (!(await assertIssueReadAllowed(req, res, issue))) return;
 
-    const [wakeDiagnostic, blockerDiagnostic, includeInternalIds] =
+    const [wakeDiagnostic, blockerDiagnostic, includeInternalIds, executionBlocker] =
       await Promise.all([
         svc.getWakeDiagnostics(issue.id),
         svc.getBlockerDiagnostics(issue.id),
         actorCanReadCompanyScope(req, issue.companyId),
+        getExecutionBlocker(db, issue.companyId, issue.id),
       ]);
     const visibleBlockers = await filterIssuesForActor(
       req,
@@ -8743,6 +8780,7 @@ export function issueRoutes(
       visibleBlockers,
       readiness: blockerDiagnostic.readiness,
       truncated: blockerDiagnostic.truncated,
+      executionBlocker,
     });
     const response = buildIssueWakeDiagnosticsResponse({
       issue,
