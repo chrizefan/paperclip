@@ -64,7 +64,7 @@ vi.mock("../services/runner-goals.js", () => ({
 vi.mock("../services/instance-settings.js", () => ({
   instanceSettingsService: () => ({
     get: vi.fn(async () => ({ id: "instance-settings-1", general: {}, experimental: {} })),
-    getExperimental: vi.fn(async () => ({ enableSecretWriteDetection: true })),
+    getExperimental: vi.fn(async () => ({})),
     listCompanyIds: vi.fn(async () => ["company-1"]),
   }),
 }));
