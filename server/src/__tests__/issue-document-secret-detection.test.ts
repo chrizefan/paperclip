@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import request from "supertest";
+import { documentService } from "../services/documents.js";
 import { fingerprintSecret } from "../services/secret-detection.js";
 import {
   describeEmbeddedPostgres,
@@ -129,6 +130,28 @@ describeEmbeddedPostgres("issue document secret detection", () => {
     expect(stored.status).toBe(200);
     expect(stored.body.body).toBe("# Plan\n\nFirst revision.");
     expect(JSON.stringify(stored.body)).not.toContain("AKIA");
+  });
+
+  it("refuses a secret in an import batch before any row is written", async () => {
+    const { companyId, issueId } = await fixture.seedIssue(db);
+    const row = {
+      companyId,
+      issueId,
+      title: null,
+      format: "markdown",
+      createdByAgentId: null,
+      createdByUserId: null,
+      createdByRunId: null,
+      sourceTrust: null,
+    };
+
+    await expect(
+      documentService(db).createIssueDocumentsForImport([
+        { ...row, key: "plan", body: "A clean plan." },
+        { ...row, key: "notes", body: `deploy key ${AWS_KEY}` },
+      ]),
+    ).rejects.toMatchObject({ rule: "aws_access_key_id" });
+    expect(await fixture.countRows(db, "documents", issueId)).toBe(0);
   });
 
   it("persists a secret document when the experimental toggle is off", async () => {

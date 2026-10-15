@@ -108,6 +108,30 @@ describeEmbeddedPostgres("issue interaction secret detection", () => {
     expect(await fixture.countRows(db, "interactions", issueId)).toBe(0);
   });
 
+  it("refuses a secret in a resolution input and leaves the interaction pending", async () => {
+    const { companyId, issueId } = await fixture.seedIssue(db);
+    const app = fixture.createApp(db, companyId);
+    const created = await request(app)
+      .post(`/api/issues/${issueId}/interactions`)
+      .send(cleanConfirmation());
+    expect(created.status).toBe(201);
+
+    const response = await request(app)
+      .post(`/api/issues/${issueId}/interactions/${created.body.id}/reject`)
+      .send({ reason: `hold, the key ${AWS_KEY} leaked` });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      error: "secret_detected",
+      rule: "aws_access_key_id",
+      fingerprint: fingerprintSecret(AWS_KEY),
+    });
+    const [row] = await db
+      .select({ status: issueThreadInteractions.status })
+      .from(issueThreadInteractions);
+    expect(row?.status).toBe("pending");
+  });
+
   it("persists a secret interaction when the experimental toggle is off", async () => {
     const { companyId, issueId } = await fixture.seedIssue(db);
     const restore = await fixture.withSecretWriteDetection(db, false);

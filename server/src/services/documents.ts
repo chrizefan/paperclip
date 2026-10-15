@@ -564,6 +564,9 @@ export function documentService(db: Db) {
      */
     createIssueDocumentsForImport: async (rows: ImportIssueDocumentRow[]): Promise<void> => {
       if (rows.length === 0) return;
+      // Scan every row before the first insert so one refused row cannot leave
+      // the batch half-written.
+      await assertNoSecretWrite(db, rows.flatMap((row) => [row.title, row.body]));
       const now = new Date();
       const documentRows: Array<Record<string, unknown>> = [];
       const revisionRows: Array<Record<string, unknown>> = [];
