@@ -10,6 +10,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,6 +28,7 @@ import { nativeMcpLaunchBinding } from "./native-mcp.js";
 import {
   materializeNativeRuntimeSkills,
   prepareIsolatedCodexHome,
+  releaseMaterializedNativeRuntimeSkills,
 } from "./runtime-context-materializer.js";
 
 const roots: string[] = [];
@@ -472,5 +474,202 @@ describe("runtime context materialization", () => {
       sourceCodexHome: sourceHome,
     });
     await expect(stat(join(symlinkCodexHome, "auth.json"))).rejects.toThrow();
+  });
+});
+
+describe("bare-name skill aliases (DIG-2100)", () => {
+  const hashFor = (key: string): string =>
+    createHash("sha256").update(key).digest("hex").slice(0, 10);
+
+  function hashedSkillContext(
+    skillRoot: string,
+    instructionRoot: string,
+    key: string,
+    slug: string,
+  ): NativeRuntimeContextSnapshot {
+    const digest = "0".repeat(64);
+    const runtimeName = `${slug}--${hashFor(key)}`;
+    const value = {
+      prompt: {
+        revision: PAPERCLIP_EXECUTION_PROMPT_REVISION,
+        text: PAPERCLIP_EXECUTION_PROMPT,
+        digest: nativeRuntimePromptDigest(),
+      },
+      instructions: {
+        entryPath: "AGENTS.md",
+        bundle: {
+          schema: NATIVE_RUNTIME_ASSET_SCHEMA,
+          digest,
+          manifestDigest: digest,
+          rootPath: instructionRoot,
+          fileCount: 2,
+          totalBytes: 2,
+        },
+      },
+      skills: [{
+        key,
+        runtimeName,
+        versionId: "version-1",
+        bundle: {
+          schema: NATIVE_RUNTIME_ASSET_SCHEMA,
+          digest,
+          manifestDigest: digest,
+          rootPath: skillRoot,
+          fileCount: 2,
+          totalBytes: 2,
+        },
+      }],
+      mcp: { assignmentSetId: slug, digest, bindingId: "binding" },
+    } satisfies Omit<NativeRuntimeContextSnapshot, "aggregateDigest">;
+    return { ...value, aggregateDigest: canonicalNativeRuntimeContextDigest(value) };
+  }
+
+  it("materializes a bare-name symlink twin next to the hash-suffixed dir", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paperclip-bare-alias-"));
+    roots.push(root);
+    const assigned = join(root, "skill-source");
+    const instructions = join(root, "instructions-source");
+    await mkdir(assigned, { recursive: true });
+    await mkdir(instructions, { recursive: true });
+    await writeFile(join(assigned, "SKILL.md"), "# Company skill\n");
+    await writeFile(join(instructions, "AGENTS.md"), "Instructions\n");
+    const key = "company/company-1/my-skill";
+    const skillsHome = join(root, "skills-home");
+
+    await materializeNativeRuntimeSkills(
+      hashedSkillContext(assigned, instructions, key, "my-skill"),
+      skillsHome,
+    );
+
+    // Both the hash-suffixed form and the bare form resolve to the same bytes.
+    await expect(readFile(join(skillsHome, "my-skill", "SKILL.md"), "utf8")).resolves.toBe(
+      "# Company skill\n",
+    );
+    const hashed = `my-skill--${hashFor(key)}`;
+    await expect(readFile(join(skillsHome, hashed, "SKILL.md"), "utf8")).resolves.toBe(
+      "# Company skill\n",
+    );
+    expect((await lstat(join(skillsHome, "my-skill"))).isSymbolicLink()).toBe(true);
+    expect((await lstat(join(skillsHome, hashed))).isDirectory()).toBe(true);
+  });
+
+  it("leaves already-bare built-in skills without an alias", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paperclip-bare-builtin-"));
+    roots.push(root);
+    const assigned = join(root, "skill-source");
+    const instructions = join(root, "instructions-source");
+    await mkdir(assigned, { recursive: true });
+    await mkdir(instructions, { recursive: true });
+    await writeFile(join(assigned, "SKILL.md"), "# Builtin\n");
+    await writeFile(join(instructions, "AGENTS.md"), "Instructions\n");
+    const skillsHome = join(root, "skills-home");
+
+    await materializeNativeRuntimeSkills(
+      context(assigned, instructions, "paperclip"),
+      skillsHome,
+    );
+
+    expect(await readdir(skillsHome)).toEqual(["paperclip"]);
+    expect((await lstat(join(skillsHome, "paperclip"))).isSymbolicLink()).toBe(false);
+  });
+
+  it("skips a bare alias that would collide with an assigned name", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paperclip-bare-collision-"));
+    roots.push(root);
+    const companySource = join(root, "company-source");
+    const builtinSource = join(root, "builtin-source");
+    const instructions = join(root, "instructions-source");
+    await mkdir(companySource, { recursive: true });
+    await mkdir(builtinSource, { recursive: true });
+    await mkdir(instructions, { recursive: true });
+    await writeFile(join(companySource, "SKILL.md"), "# Company\n");
+    await writeFile(join(builtinSource, "SKILL.md"), "# Builtin\n");
+    await writeFile(join(instructions, "AGENTS.md"), "Instructions\n");
+    const digest = "0".repeat(64);
+    const companyKey = "company/company-1/shared";
+    const base = {
+      prompt: {
+        revision: PAPERCLIP_EXECUTION_PROMPT_REVISION,
+        text: PAPERCLIP_EXECUTION_PROMPT,
+        digest: nativeRuntimePromptDigest(),
+      },
+      instructions: {
+        entryPath: "AGENTS.md",
+        bundle: {
+          schema: NATIVE_RUNTIME_ASSET_SCHEMA,
+          digest,
+          manifestDigest: digest,
+          rootPath: instructions,
+          fileCount: 2,
+          totalBytes: 2,
+        },
+      },
+      mcp: { assignmentSetId: "shared", digest, bindingId: "binding" },
+    };
+    const snapshot = {
+      ...base,
+      skills: [
+        {
+          key: companyKey,
+          runtimeName: `shared--${hashFor(companyKey)}`,
+          versionId: "version-1",
+          bundle: {
+            schema: NATIVE_RUNTIME_ASSET_SCHEMA,
+            digest,
+            manifestDigest: digest,
+            rootPath: companySource,
+            fileCount: 2,
+            totalBytes: 2,
+          },
+        },
+        {
+          key: "paperclipai/paperclip/shared",
+          runtimeName: "shared",
+          versionId: "version-1",
+          bundle: {
+            schema: NATIVE_RUNTIME_ASSET_SCHEMA,
+            digest,
+            manifestDigest: digest,
+            rootPath: builtinSource,
+            fileCount: 2,
+            totalBytes: 2,
+          },
+        },
+      ],
+    } satisfies Omit<NativeRuntimeContextSnapshot, "aggregateDigest">;
+    const skillsHome = join(root, "skills-home");
+    await materializeNativeRuntimeSkills(
+      { ...snapshot, aggregateDigest: canonicalNativeRuntimeContextDigest(snapshot) },
+      skillsHome,
+    );
+
+    // The built-in bare directory wins; the company skill stays reachable only
+    // under its hash-suffixed name and nothing was shadowed.
+    await expect(readFile(join(skillsHome, "shared", "SKILL.md"), "utf8")).resolves.toBe(
+      "# Builtin\n",
+    );
+    await expect(
+      readFile(join(skillsHome, `shared--${hashFor(companyKey)}`, "SKILL.md"), "utf8"),
+    ).resolves.toBe("# Company\n");
+  });
+
+  it("releases a materialized tree that contains bare aliases", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paperclip-bare-release-"));
+    roots.push(root);
+    const assigned = join(root, "skill-source");
+    const instructions = join(root, "instructions-source");
+    await mkdir(assigned, { recursive: true });
+    await mkdir(instructions, { recursive: true });
+    await writeFile(join(assigned, "SKILL.md"), "# Company skill\n");
+    await writeFile(join(instructions, "AGENTS.md"), "Instructions\n");
+    const key = "company/company-1/my-skill";
+    const skillsHome = join(root, "skills-home");
+
+    await materializeNativeRuntimeSkills(
+      hashedSkillContext(assigned, instructions, key, "my-skill"),
+      skillsHome,
+    );
+    await releaseMaterializedNativeRuntimeSkills(skillsHome);
+    await expect(stat(skillsHome)).rejects.toThrow();
   });
 });
