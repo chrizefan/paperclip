@@ -11,6 +11,12 @@ const AUTHORED_WAIT =
 
 const PARKING_SUMMARY = ["## Next Action", "", `- ${AUTHORED_WAIT}`].join("\n");
 
+const GENERATED_IN_REVIEW_SUMMARY = [
+  "## Next Action",
+  "",
+  "- Wait for reviewer feedback or approval before continuing executor work.",
+].join("\n");
+
 function summaryFor(runStatus: string, previousSummaryBody: string | null) {
   return buildContinuationSummaryMarkdown({
     issue: {
@@ -50,4 +56,12 @@ describe("DIG-3097: an authored deliberate wait must survive next-action generat
     const body = summaryFor("cancelled", PARKING_SUMMARY);
     expect(continuationSummaryParksExecutor(body)).toBe(true);
   });
+
+  it.each(["succeeded", "failed", "cancelled"])(
+    "drops the generated in_review wait once the issue is back in progress (%s run)",
+    (runStatus) => {
+      const body = summaryFor(runStatus, GENERATED_IN_REVIEW_SUMMARY);
+      expect(continuationSummaryParksExecutor(body)).toBe(false);
+    },
+  );
 });

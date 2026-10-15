@@ -100,9 +100,14 @@ function inferMode(issue: IssueSummaryInput, run: RunSummaryInput) {
   return "implementation";
 }
 
+const IN_REVIEW_NEXT_ACTION = "Wait for reviewer feedback or approval before continuing executor work.";
+
 function inferNextAction(issue: IssueSummaryInput, run: RunSummaryInput, previousNextAction: string | null) {
   if (issue.status === "done") return "Review the completed issue output and close any remaining follow-up comments.";
-  if (issue.status === "in_review") return "Wait for reviewer feedback or approval before continuing executor work.";
+  if (issue.status === "in_review") return IN_REVIEW_NEXT_ACTION;
+  // The generated in_review line is not an authored wait. Once the issue has left
+  // in_review it is stale, and carrying it forward would park the executor.
+  if (previousNextAction === IN_REVIEW_NEXT_ACTION) previousNextAction = null;
   // DIG-3097: an authored "I am deliberately waiting" next action must survive a
   // terminal run. The failed/timed_out/cancelled branches below return before the
   // previousNextAction passthrough, which discarded it. A parked executor then read
