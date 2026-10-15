@@ -6070,6 +6070,19 @@ export function agentRoutes(
         typeof failedContext.issueId === "string"
           ? failedContext.issueId
           : null;
+      // A retry that cannot be attributed to a task would mint an equally unbound
+      // run: it can report a hollow success while the stranded issue stays
+      // stranded and nothing errors anywhere (DIG-2091). Refuse it instead, ahead
+      // of the cancellation check so an unbound run always gets this code.
+      const hasTaskBinding = ["issueId", "taskId", "taskKey"].some((key) => {
+        const value = failedContext[key];
+        return typeof value === "string" && value.trim().length > 0;
+      });
+      if (!hasTaskBinding) {
+        throw conflict("retry_failed_run_unbound_recovery", {
+          code: "retry_failed_run_unbound_recovery",
+        });
+      }
       if (failedRun.status === "cancelled" && (!issueId ||
           (await getExecutionBlocker(db, agent.companyId, issueId))?.runId !== failedRun.id)) {
         throw conflict("The stopped run no longer owns this task's recovery hold.");
