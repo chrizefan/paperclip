@@ -191,7 +191,7 @@ import {
   toolProfiles,
   workspaceOperations,
 } from "@paperclipai/db";
-import { conflict, HttpError, notFound } from "../errors.js";
+import { conflict, HttpError, notFound, SecretDetectedError } from "../errors.js";
 import {
   getStartupTraceContext,
   getStartupTracer,
@@ -25844,12 +25844,30 @@ export function heartbeatService(
                   issueId,
                   runId: livenessRun.id,
                 });
-              const comment = await issuesSvc.addComment(
-                issueId,
-                resolved.text,
-                { agentId: agent.id, runId: livenessRun.id },
-                { authorizationReason: presentationAuthorizationReason, completionReply: true },
-              );
+              // Run presentation text is untrusted adapter output. When the
+              // pre-persist secret guard refuses it, withhold the comment and
+              // continue the flow: presentation is best-effort, and only the
+              // rule name plus salted fingerprint ever leave this branch.
+              let presentationComment: { id: string; body: string } | null = null;
+              try {
+                presentationComment = await issuesSvc.addComment(
+                  issueId,
+                  resolved.text,
+                  { agentId: agent.id, runId: livenessRun.id },
+                  { authorizationReason: presentationAuthorizationReason, completionReply: true },
+                );
+              } catch (err) {
+                if (!(err instanceof SecretDetectedError)) throw err;
+                presentationDecision = {
+                  ...presentationDecision,
+                  reasonCodes: [
+                    ...presentationDecision.reasonCodes,
+                    "presentation_withheld_secret_detected",
+                  ],
+                };
+              }
+              if (presentationComment) {
+              const comment = presentationComment;
               presentationDecision = {
                 ...presentationDecision,
                 commentId: comment.id,
@@ -25878,6 +25896,7 @@ export function heartbeatService(
                   presentationSource: presentationDecision.chosenSource,
                 },
               });
+              }
             } else if (presentationDecision.commentAction === "create") {
               presentationDecision = {
                 ...presentationDecision,

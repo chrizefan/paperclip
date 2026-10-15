@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import type { Db } from "@paperclipai/db";
 import { ZodError } from "zod";
-import { HttpError } from "../errors.js";
+import { HttpError, SecretDetectedError } from "../errors.js";
 import { trackErrorHandlerCrash } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { captureException } from "../sentry.js";
@@ -128,6 +128,18 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ) {
+  if (err instanceof SecretDetectedError) {
+    // Exact, minimal shape: the rule that fired and a salted fingerprint only.
+    // No value, no substring of the value, and no details envelope. The marker
+    // tells the HTTP logger to drop the request body, which holds the value.
+    (res as any).__secretDetected = true;
+    res.status(422).json({
+      error: "secret_detected",
+      rule: err.rule,
+      fingerprint: err.fingerprint,
+    });
+    return;
+  }
   if (err instanceof HttpError) {
     const details =
       err.details &&

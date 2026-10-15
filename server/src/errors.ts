@@ -44,3 +44,25 @@ export function unprocessable(message: string, details?: unknown) {
 export function tooManyRequests(message = "Too many requests", details?: unknown) {
   return new HttpError(429, message, details);
 }
+
+/**
+ * Refusal for a write that carries a secret value. The response body names the
+ * matching rule and carries only a salted fingerprint — never the value, or any
+ * substring of it. The dedicated error-handler branch renders the exact shape
+ * `{ error: "secret_detected", rule, fingerprint }`.
+ */
+export class SecretDetectedError extends HttpError {
+  readonly rule: string;
+  readonly fingerprint: string;
+
+  constructor(rule: string, fingerprint: string) {
+    super(422, "secret_detected", { code: "secret_detected", rule, fingerprint });
+    this.name = "SecretDetectedError";
+    this.rule = rule;
+    this.fingerprint = fingerprint;
+  }
+}
+
+export function secretDetected(rule: string, fingerprint: string) {
+  return new SecretDetectedError(rule, fingerprint);
+}
