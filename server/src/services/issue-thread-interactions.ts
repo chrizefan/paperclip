@@ -3535,19 +3535,17 @@ export function issueThreadInteractionService(
         if (!sourceRun || sourceRun.companyId !== issue.companyId) {
           throw unprocessable("sourceRunId must belong to the same company");
         }
-        if (data.kind === "ask_user_questions") {
-          if (actor.agentId && sourceRun.agentId !== actor.agentId) {
-            throw unprocessable("sourceRunId must belong to the creating agent");
-          }
-          const snapshot = sourceRun.contextSnapshot ?? {};
-          const boundIssueIds = [
-            sourceRun.nativeIssueId,
-            snapshot.issueId,
-            snapshot.taskId,
-          ].filter((value): value is string => typeof value === "string" && value.length > 0);
-          if (boundIssueIds.some((boundIssueId) => boundIssueId !== issue.id)) {
-            throw unprocessable("sourceRunId must belong to the same issue");
-          }
+        const snapshot = sourceRun.contextSnapshot ?? {};
+        const boundIssueIds = [
+          sourceRun.nativeIssueId,
+          snapshot.issueId,
+          snapshot.taskId,
+        ].filter((value): value is string => typeof value === "string" && value.length > 0);
+        if (boundIssueIds.some((boundIssueId) => boundIssueId !== issue.id)) {
+          throw unprocessable("sourceRunId must belong to the same issue");
+        }
+        if (data.kind === "ask_user_questions" && actor.agentId && sourceRun.agentId !== actor.agentId) {
+          throw unprocessable("sourceRunId must belong to the creating agent");
         }
         sourceRunContext = sourceRun.contextSnapshot;
         sourceRunCreatedAt = sourceRun.createdAt;
