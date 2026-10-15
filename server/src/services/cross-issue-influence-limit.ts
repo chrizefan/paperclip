@@ -110,13 +110,12 @@ export async function observeCrossIssueInfluence(
     }
 
     const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
-    if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
-    if (
-      sourceIssueId === input.targetIssueId ||
-      (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
-    ) {
-      return null;
-    }
+    // An unbound run has no source issue to exempt or attribute to. It spends
+    // the same per-run budget as any other run instead of being refused at
+    // admission: no own-issue exemption, every write observed and counted, and
+    // the 21st refused exactly as for a bound run. `sourceIssueId` stays null
+    // in the audit row so an unbound run's write is always distinguishable.
+    const unbound = !sourceIssueId;
 
     const priorCount = await tx
       .select({ count: count() })
@@ -127,6 +126,14 @@ export async function observeCrossIssueInfluence(
         eq(activityLog.action, CROSS_ISSUE_INFLUENCE_ACTIVITY),
       ))
       .then((rows) => Number(rows[0]?.count ?? 0));
+    if (
+      !unbound &&
+      (sourceIssueId === input.targetIssueId ||
+      (input.targetIssueIdentifier && (sourceIssueId as string).toUpperCase() === input.targetIssueIdentifier.toUpperCase()))
+    ) {
+      return null;
+    }
+
     const decision = evaluateCrossIssueInfluenceLimit({ priorCount, now: input.now });
 
     await tx.insert(activityLog).values({
@@ -143,7 +150,8 @@ export async function observeCrossIssueInfluence(
       entityId: input.targetIssueId,
       details: {
         kind: input.kind,
-        sourceIssueId,
+        sourceIssueId: sourceIssueId ?? null,
+        sourceIssueAttribution: unbound ? "unbound_run_budget" : "run_context_snapshot",
         targetIssueId: input.targetIssueId,
         targetIssueIdentifier: input.targetIssueIdentifier ?? null,
         count: decision.count,
@@ -159,7 +167,8 @@ export async function observeCrossIssueInfluence(
       companyId: input.companyId,
       runId: input.runId,
       agentId: input.agentId,
-      sourceIssueId,
+      sourceIssueId: sourceIssueId ?? null,
+      sourceIssueAttribution: unbound ? "unbound_run_budget" : "run_context_snapshot",
       targetIssueId: input.targetIssueId,
       kind: input.kind,
       count: decision.count,
