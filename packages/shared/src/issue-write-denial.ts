@@ -254,7 +254,7 @@ export function describeIssueWriteDenial(
         description:
           `Every agent comment and task update is attributed to a heartbeat run so the ` +
           `cross-issue cap can be counted and the audit trail can name who acted for whom. ` +
-          `This request arrived without a run bound to an assigned issue, so it could not ` +
+          `This request arrived without a run bound to an issue, so it could not ` +
           `be contained.`,
         whoCanAct: `${actor}, once the request carries a run that is bound to an issue.`,
         sanctionedPath:
