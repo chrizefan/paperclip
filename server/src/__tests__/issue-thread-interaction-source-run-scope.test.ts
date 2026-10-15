@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
+import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { agents, companies, createDb, heartbeatRuns, issues, issueThreadInteractions } from "@paperclipai/db";
 import { errorHandler } from "../middleware/index.js";
@@ -201,6 +202,32 @@ describePg("issue-thread interaction sourceRunId is bound to the interaction's o
 
     expect(res.status).toBe(409);
     expect(res.body?.error).toBe("Issue run ownership conflict");
+
+    const rows = await db.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("refuses a run whose nativeIssueId matches this task but snapshot.issueId does not", async () => {
+    const { companyId, targetIssueId, producerIssueId, targetRunId } = await seed();
+    await db
+      .update(heartbeatRuns)
+      .set({
+        nativeIssueId: targetIssueId,
+        contextSnapshot: { issueId: producerIssueId },
+      })
+      .where(eq(heartbeatRuns.id, targetRunId));
+
+    const res = await request(boardApp(companyId))
+      .post(`/api/issues/${targetIssueId}/interactions`)
+      .send({
+        kind: "request_confirmation",
+        payload: INTERACTION_KINDS[2].payload,
+        title: "DIG-2422 first-id match",
+        sourceRunId: targetRunId,
+      });
+
+    expect(res.status).toBe(422);
+    expect(res.body?.error).toBe("sourceRunId must belong to the same issue");
 
     const rows = await db.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions);
     expect(rows).toHaveLength(0);
