@@ -42,6 +42,16 @@ interface NamedRule {
   regex: RegExp;
   /** Named capture group holding the sensitive value; defaults to the whole match. */
   valueGroup?: string;
+  /** Optional second check on the value; a match it rejects is not a secret. */
+  accept?: (value: string) => boolean;
+}
+
+/**
+ * A `TOKEN=`/`SECRET:` value with no digit is an identifier or a placeholder
+ * (`see_the_documentation_below`, `YOUR_TOKEN_HERE`), not a generated credential.
+ */
+function looksGeneratedCredential(value: string): boolean {
+  return /\d/.test(value) && !/^(?:your|my|example|placeholder|changeme)/i.test(value);
 }
 
 /**
@@ -56,7 +66,8 @@ const NAMED_RULES: NamedRule[] = [
   },
   {
     name: "wireguard_private_key_inline",
-    regex: /(?<![A-Za-z0-9_+/=])(?<s>[A-Za-z0-9+/]{43}=)(?![A-Za-z0-9+/=])/g,
+    // `-` in the lookbehind keeps an SRI digest (`sha256-<43>=`) out of this rule.
+    regex: /(?<![A-Za-z0-9_+/=-])(?<s>[A-Za-z0-9+/]{43}=)(?![A-Za-z0-9+/=])/g,
     valueGroup: "s",
   },
   {
@@ -86,11 +97,18 @@ const NAMED_RULES: NamedRule[] = [
     name: "private_key_header_inline",
     regex: /(?:PRIVATE_KEY|SECRET|TOKEN)\s*[=:]\s*["']?(?<s>[A-Za-z0-9+/_\-]{24,})/g,
     valueGroup: "s",
+    accept: looksGeneratedCredential,
   },
 ];
 
-/** A JWT-shaped run; kept only when `looksLikeCredentialJwt` confirms it. */
-const JWT_CANDIDATE = /[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+/**
+ * A JWT-shaped run; kept only when `looksLikeCredentialJwt` confirms it. The
+ * lookbehind anchors a candidate to the start of a run: without it the engine
+ * retries from every offset of a long dot-free run, which is quadratic (16 s on
+ * an 80k-character blob). Anchored, each run is tried once.
+ */
+const JWT_CANDIDATE =
+  /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
 
 /**
  * Opaque hex run of 80+ characters. Above a git SHA (40) and a sha256 (64),
@@ -104,7 +122,55 @@ const HIGH_ENTROPY_BASE64 =
   /(?<![A-Za-z0-9+/_\-])([A-Za-z0-9+/_\-]{80,}={0,2})(?![A-Za-z0-9+/_\-=])/g;
 
 const MIN_BASE64_ENTROPY_BITS_PER_CHAR = 3.5;
+
+/**
+ * A random base64 token has a `/`, `+`, `-` or `_` about once every 32
+ * characters (ratio ~0.03). A filesystem path, URL path or kebab/snake slug
+ * has one every few characters. 0.12 sits far enough above the token mean that
+ * an 80+ character random token practically never crosses it.
+ */
+const MAX_TOKEN_SEPARATOR_RATIO = 0.12;
+
+function looksLikePathOrSlug(value: string): boolean {
+  const separators = value.match(/[/+_-]/g)?.length ?? 0;
+  return separators / value.length > MAX_TOKEN_SEPARATOR_RATIO;
+}
+
+/** A data URI payload (`data:image/png;base64,...`) or an SRI digest (`sha512-...`). */
+function isEncodedPayloadOrDigest(text: string, value: string, index: number): boolean {
+  if (/^sha(?:256|384|512)-/.test(value)) return true;
+  return text.slice(Math.max(0, index - 7), index) === "base64,";
+}
 const MAX_PRINTABLE_DECODED_RATIO = 0.85;
+
+/**
+ * Identifier shapes that are addressing, not credentials. A single UUID, git
+ * SHA or sha256 never reaches the 80-character high-entropy threshold on its
+ * own — but system comments embed several of them in one markdown link
+ * (`[run](.../agents/<uuid>/runs/<uuid>)`), and the `/` and `-` joining them
+ * are both in the base64url alphabet, so the joined path reads as one 80+
+ * run. Mask them (length-preserving, so positions are stable) before the
+ * high-entropy scans. Boundaries keep a longer hex run intact: masking can
+ * never shorten a real 128-hex token below the threshold.
+ */
+const UUID_SHAPE =
+  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+/**
+ * A sha384/sha512 hex digest is only masked behind its label: a bare 96/128-hex
+ * run is indistinguishable from an opaque token and stays reportable.
+ */
+const LABELLED_SHA384_512_HEX =
+  /(?<=\bsha-?(?:384|512)(?:sum)?\s*[:=]?\s*)(?:[0-9a-fA-F]{128}|[0-9a-fA-F]{96})(?![0-9a-fA-F])/gi;
+const STANDALONE_HEX_64 = /(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])/g;
+const STANDALONE_HEX_40 = /(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])/g;
+
+function maskBenignIdentifiers(text: string): string {
+  return text
+    .replace(UUID_SHAPE, (m) => " ".repeat(m.length))
+    .replace(LABELLED_SHA384_512_HEX, (m) => " ".repeat(m.length))
+    .replace(STANDALONE_HEX_64, (m) => " ".repeat(m.length))
+    .replace(STANDALONE_HEX_40, (m) => " ".repeat(m.length));
+}
 
 /** Shannon entropy, in bits per character, of a short string. */
 function shannonEntropy(value: string): number {
@@ -148,7 +214,7 @@ export function detectSecret(text: string, options: DetectSecretOptions = {}): S
   for (const rule of NAMED_RULES) {
     for (const match of text.matchAll(rule.regex)) {
       const value = rule.valueGroup ? match.groups?.[rule.valueGroup] : match[0];
-      if (value) {
+      if (value && (!rule.accept || rule.accept(value))) {
         return { rule: rule.name, fingerprint: fingerprintSecret(value) };
       }
     }
@@ -160,12 +226,20 @@ export function detectSecret(text: string, options: DetectSecretOptions = {}): S
     }
   }
 
-  for (const match of text.matchAll(HIGH_ENTROPY_HEX)) {
-    return { rule: "high_entropy_hex", fingerprint: fingerprintSecret(match[1]!) };
+  const scannable = maskBenignIdentifiers(text);
+  for (const match of scannable.matchAll(HIGH_ENTROPY_HEX)) {
+    const value = match[1]!;
+    // A repeated digit run (e.g. synthetic "0123456789" fixtures) is long
+    // but low-entropy; a real opaque hex token is uniformly random (~4 bits
+    // per char). Same threshold as the base64 arm below.
+    if (shannonEntropy(value) < MIN_BASE64_ENTROPY_BITS_PER_CHAR) continue;
+    return { rule: "high_entropy_hex", fingerprint: fingerprintSecret(value) };
   }
 
-  for (const match of text.matchAll(HIGH_ENTROPY_BASE64)) {
+  for (const match of scannable.matchAll(HIGH_ENTROPY_BASE64)) {
     const value = match[1]!;
+    if (isEncodedPayloadOrDigest(scannable, value, match.index ?? 0)) continue;
+    if (looksLikePathOrSlug(value)) continue;
     if (decodesToPrintableText(value)) continue;
     if (shannonEntropy(value) < MIN_BASE64_ENTROPY_BITS_PER_CHAR) continue;
     return { rule: "high_entropy_base64", fingerprint: fingerprintSecret(value) };

@@ -5,7 +5,7 @@ import pino from "pino";
 import { pinoHttp } from "pino-http";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { HttpError } from "../errors.js";
+import { HttpError, secretDetected } from "../errors.js";
 import { HTTP_LOG_REDACT_PATHS } from "../middleware/http-log-redaction.js";
 import { errorHandler } from "../middleware/error-handler.js";
 import { testAdapterEnvironmentSchema } from "@paperclipai/shared";
@@ -524,6 +524,35 @@ describe("HTTP logger redaction", () => {
     });
     expect(log.req.query).toBeUndefined();
     expect(log.reqQuery).toBeUndefined();
+  });
+
+  it("never logs the body of a request refused for carrying a secret", async () => {
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(chunk.toString());
+        callback();
+      },
+    });
+    const testLogger = pino({ redact: [...HTTP_LOG_REDACT_PATHS] }, stream);
+    const app = express();
+    app.use(express.json());
+    app.use(createHttpLogger(testLogger));
+    app.post("/api/issues/:id/comments", () => {
+      throw secretDetected("high_entropy_base64", "fp-canary");
+    });
+    app.use(errorHandler);
+
+    const response = await request(app)
+      .post("/api/issues/issue-1/comments")
+      .send({ body: "refused-comment-canary-7d1e0b" });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toMatchObject({ error: "secret_detected" });
+    const output = chunks.join("");
+    expect(output).not.toContain("refused-comment-canary-7d1e0b");
+    const log = JSON.parse(output.trim()) as { reqBody?: unknown };
+    expect(log.reqBody).toBe("[REDACTED]");
   });
 
   it("redacts failed secret payload values from structured request logs", async () => {

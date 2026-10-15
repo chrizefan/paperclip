@@ -130,7 +130,9 @@ export function errorHandler(
 ) {
   if (err instanceof SecretDetectedError) {
     // Exact, minimal shape: the rule that fired and a salted fingerprint only.
-    // No value, no substring of the value, and no details envelope.
+    // No value, no substring of the value, and no details envelope. The marker
+    // tells the HTTP logger to drop the request body, which holds the value.
+    (res as any).__secretDetected = true;
     res.status(422).json({
       error: "secret_detected",
       rule: err.rule,

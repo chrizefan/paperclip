@@ -152,7 +152,7 @@ export type QueuedRunFacts = {
    * check must read it as its own bypass signal rather than infer it from
    * `isInteractionWake` (which only covers comment-derived interaction wakes).
    */
-  isPendingInteractionWake?: boolean;
+  isNonAssigneeByDesignWake?: boolean;
   isAuthorizedSourceScopedRecovery: boolean;
   isNonAssigneeWorkspaceBusyRetry: boolean;
 
@@ -177,7 +177,7 @@ type OwnershipFacts = {
   issueAssigneeAgentId: string | null;
   isNonAssigneeWorkspaceBusyRetry: boolean;
   isInteractionWake?: boolean;
-  isPendingInteractionWake?: boolean;
+  isNonAssigneeByDesignWake?: boolean;
   isCurrentReviewParticipant?: boolean;
   isAuthorizedSourceScopedRecovery?: boolean;
 };
@@ -193,10 +193,11 @@ function decideIssueOwnership(facts: OwnershipFacts): OwnershipOutcome {
   if (facts.issueAssigneeAgentId === facts.runAgentId) return "current_owner";
   if (facts.isNonAssigneeWorkspaceBusyRetry) return "current_owner";
   if (facts.isInteractionWake) return "current_owner";
-  // A card addressee is chosen by the card author, not by assignment, so a
-  // non-matching assignee here is the intended shape of the wake rather than
-  // evidence that the issue was reassigned under this run.
-  if (facts.isPendingInteractionWake) return "current_owner";
+  // A card addressee or an unblock owner is chosen by whoever raised the
+  // card or set the descriptor, not by assignment, so a non-matching assignee
+  // here is the intended shape of the wake rather than evidence that the issue
+  // was reassigned under this run.
+  if (facts.isNonAssigneeByDesignWake) return "current_owner";
   if (facts.isCurrentReviewParticipant) return "current_owner";
   if (facts.isAuthorizedSourceScopedRecovery) return "current_owner";
   return "reassigned";
@@ -578,7 +579,7 @@ export function decideQueuedRunStaleness(
     issueAssigneeAgentId: facts.issueAssigneeAgentId,
     isNonAssigneeWorkspaceBusyRetry: facts.isNonAssigneeWorkspaceBusyRetry,
     isInteractionWake: facts.isInteractionWake,
-    isPendingInteractionWake: facts.isPendingInteractionWake,
+    isNonAssigneeByDesignWake: facts.isNonAssigneeByDesignWake,
     isCurrentReviewParticipant:
       facts.reviewParticipant.isInReview &&
       facts.reviewParticipant.participantIsAgent &&

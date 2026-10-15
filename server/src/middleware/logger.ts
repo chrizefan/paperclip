@@ -172,6 +172,15 @@ export function createHttpLogger(baseLogger: Logger) {
               : {}),
           };
         }
+        if ((res as any).__secretDetected) {
+          // The write was refused because its body carries a secret. Key-based
+          // redaction cannot see it (a comment body is not a "token" key), so
+          // omit the whole body rather than log the value we just refused.
+          return {
+            reqBody: "[REDACTED]",
+            ...((req as any).route?.path ? { routePath: (req as any).route.path } : {}),
+          };
+        }
         if (ctx) {
           const secretSensitiveRoute = isSecretSensitiveHttpRequest(
             req.method,

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
   chmod,
@@ -9,6 +9,7 @@ import {
   readdir,
   rename,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -95,6 +96,28 @@ function portableRuntimeNameKey(runtimeName: string): string {
     .toLowerCase();
 }
 
+function hashSkillValue(value: string): string {
+  // Mirrors server/src/services/company-skills.ts so the materializer can tell
+  // a hash-suffixed runtime name (slug--10hex) from an already-bare one
+  // without guessing on the suffix shape alone.
+  return createHash("sha256").update(value).digest("hex").slice(0, 10);
+}
+
+/**
+ * Bare-name alias for a hash-suffixed company skill runtime name, so the
+ * skill tool resolves the bare slug every agent instruction file uses.
+ * Returns null when the skill is already bare (built-in paperclip skills) or
+ * when the name does not carry this skill key's hash suffix.
+ */
+function bareRuntimeNameAlias(key: string, runtimeName: string): string | null {
+  if (key.startsWith("paperclipai/paperclip/")) return null;
+  const suffix = `--${hashSkillValue(key)}`;
+  if (!runtimeName.endsWith(suffix)) return null;
+  const bare = runtimeName.slice(0, -suffix.length);
+  if (!bare) return null;
+  return bare;
+}
+
 async function protectStagedTree(root: string): Promise<void> {
   const rootHandle = await open(
     root,
@@ -153,6 +176,11 @@ async function unprotectMaterializedTree(root: string): Promise<void> {
     await rootHandle.chmod(0o700);
     for (const entry of await readdir(root, { withFileTypes: true })) {
       const child = join(root, entry.name);
+      // Bare-name aliases are symlinks to a sealed sibling directory. There
+      // is nothing to unseal on the link itself; the final rm removes it.
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
       if (entry.isDirectory()) {
         await unprotectMaterializedTree(child);
         continue;
@@ -270,6 +298,44 @@ export async function materializeNativeRuntimeSkills(
       });
       await assertSafeTree(target);
       await protectStagedTree(target);
+    }
+    // Bare-name twins for hash-suffixed company skills (DIG-2100). The skill
+    // tool resolves an id by exact directory name, so without a bare entry no
+    // bare-slug reference in any agent instruction file can load. A relative
+    // symlink costs nothing and matches how non-company skills already behave
+    // (real bare directories). Aliases that would collide with, or overlap as
+    // a path prefix of, an assigned name are skipped: the hash-suffixed form
+    // keeps working and no assignment is shadowed.
+    {
+      const claimed = new Set<string>();
+      for (const skill of context?.skills ?? []) {
+        claimed.add(portableRuntimeNameKey(skill.runtimeName));
+      }
+      const overlaps = (name: string): boolean => {
+        const segments = name.split("/");
+        for (let length = 1; length < segments.length; length += 1) {
+          if (claimed.has(segments.slice(0, length).join("/"))) return true;
+        }
+        for (const other of claimed) {
+          if (other.startsWith(`${name}/`)) return true;
+        }
+        return false;
+      };
+      for (const skill of context?.skills ?? []) {
+        const bare = bareRuntimeNameAlias(skill.key, skill.runtimeName);
+        if (!bare) continue;
+        safeMaterializationTarget(stagingHome, bare);
+        const key = portableRuntimeNameKey(bare);
+        if (claimed.has(key) || overlaps(key)) continue;
+        claimed.add(key);
+        const linkPath = safeMaterializationTarget(stagingHome, bare);
+        const sibling = safeMaterializationTarget(stagingHome, skill.runtimeName);
+        await mkdir(dirname(linkPath), { recursive: true, mode: 0o700 });
+        await symlink(
+          relative(dirname(linkPath), sibling),
+          linkPath,
+        );
+      }
     }
 
     // The caller supplies a new isolated home for each provider launch. Never

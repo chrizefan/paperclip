@@ -30,6 +30,37 @@ export const WAKE_COMMENT_IDS_KEY = "wakeCommentIds";
  * either file can drift and then change only one of the gates.
  */
 export const INTERACTION_PENDING_WAKE_REASON = "interaction_pending";
+
+/**
+ * Wake reason the platform stamps on the run it queues for the agent named
+ * in an issue's `unblockDescriptor.owner` (`deliverAgentUnblockNotification`
+ * in `services/routable-blocked.ts`). The owner is never the assignee: the
+ * route guard refuses `board` and any `userId` for an agent actor
+ * ("Agents may only name themselves as an unblock owner",
+ * `routes/issues.ts`), so an agent can only name itself, and the agent that
+ * blocked the issue is by construction not its assignee.
+ */
+export const ISSUE_UNBLOCK_REQUESTED_WAKE_REASON = "issue_unblock_requested";
+
+/**
+ * Wake reasons the platform itself emits, where a run agent that is not the
+ * issue assignee is the intended shape of the wake rather than evidence of a
+ * reassignment. Both producers route to a non-assignee on purpose, so the
+ * queued-run ownership check must read the mismatch as design.
+ *
+ * Kept as one set because the policy question is one question. A separate
+ * predicate per signal is how the next machine reason gets added to one and
+ * forgotten in the other.
+ *
+ * NOT in this set: reasons a human or agent typed into the `wakeReason`
+ * string. That field is a machine channel and prose there is a separate
+ * defect (a guard keyed on English text would be wrong).
+ */
+export const NON_ASSIGNEE_BY_DESIGN_WAKE_REASONS: ReadonlySet<string> = new Set([
+  INTERACTION_PENDING_WAKE_REASON,
+  ISSUE_UNBLOCK_REQUESTED_WAKE_REASON,
+]);
+
 export const RESOLVED_INTERACTION_CONTINUATION_STATUSES = new Set([
   "accepted",
   "answered",
@@ -99,7 +130,10 @@ export function allowsIssueInteractionWake(
 }
 
 /**
- * True for the wake queued for a question card's addressee.
+ * True when this wake is one the platform routes to an agent who is not the
+ * issue assignee on purpose: a question card's addressee
+ * (`interaction_pending`) or an unblock descriptor's owner
+ * (`issue_unblock_requested`). See NON_ASSIGNEE_BY_DESIGN_WAKE_REASONS.
  *
  * Deliberately separate from `allowsIssueInteractionWake`. That helper also
  * requires a derived comment id, and every one of its callers scopes the
@@ -112,10 +146,11 @@ export function allowsIssueInteractionWake(
  * This predicate answers only the queued-run ownership question: the run's
  * agent differs from the assignee by design, and the assignee never changed.
  */
-export function isPendingInteractionWake(
+export function isNonAssigneeByDesignWake(
   contextSnapshot: Record<string, unknown> | null | undefined,
 ): boolean {
-  return readNonEmptyString(contextSnapshot?.wakeReason) === INTERACTION_PENDING_WAKE_REASON;
+  const wakeReason = readNonEmptyString(contextSnapshot?.wakeReason);
+  return wakeReason !== null && NON_ASSIGNEE_BY_DESIGN_WAKE_REASONS.has(wakeReason);
 }
 
 export function isResolvedInteractionContinuationWakeContext(contextSnapshot: unknown): boolean {
