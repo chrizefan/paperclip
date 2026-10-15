@@ -17,6 +17,14 @@
 import fs from 'node:fs';
 import { readLines, extractSites } from './lib/extract.mjs';
 const [distPath, outDir] = process.argv.slice(2);
+if (!distPath || !outDir) {
+  console.error('usage: probe-03-counterfactuals.mjs <dist.js> <outDir>');
+  process.exit(2);
+}
+// Create the output directory: this probe takes an outDir it did not previously
+// make, so a first run died ENOENT writing its first mutant. A tool whose first
+// use needs an undocumented pre-made directory is not reproducible by a reader.
+fs.mkdirSync(outDir, { recursive: true });
 const lines = readLines(distPath);
 const upd = extractSites(lines).filter((s) => s.guard === 'updated');
 if (upd.length < 11) { console.error(`need >=11 'updated' sites, have ${upd.length}`); process.exit(3); }
