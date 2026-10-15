@@ -125,10 +125,11 @@ const MIN_BASE64_ENTROPY_BITS_PER_CHAR = 3.5;
 
 /**
  * A random base64 token has a `/`, `+`, `-` or `_` about once every 32
- * characters. A filesystem path, URL path or kebab/snake slug has one every
- * few characters. Above this ratio the run is addressing, not a credential.
+ * characters (ratio ~0.03). A filesystem path, URL path or kebab/snake slug
+ * has one every few characters. 0.12 sits far enough above the token mean that
+ * an 80+ character random token practically never crosses it.
  */
-const MAX_TOKEN_SEPARATOR_RATIO = 0.08;
+const MAX_TOKEN_SEPARATOR_RATIO = 0.12;
 
 function looksLikePathOrSlug(value: string): boolean {
   const separators = value.match(/[/+_-]/g)?.length ?? 0;
