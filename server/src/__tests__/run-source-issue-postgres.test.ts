@@ -111,7 +111,7 @@ describeEmbeddedPostgres("run source issue binding on checkout (postgres)", () =
       }),
     ).rejects.toThrow();
 
-    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId });
+    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId, agentId });
 
     expect(await readSnapshot(runId)).toMatchObject({ issueId });
 
@@ -142,7 +142,7 @@ describeEmbeddedPostgres("run source issue binding on checkout (postgres)", () =
 
   it("keeps the admission scope of an already-scoped run", async () => {
     const admittedFor = randomUUID();
-    const { companyId, runId } = await seedRun({
+    const { companyId, agentId, runId } = await seedRun({
       triggeredBy: "agent",
       issueId: admittedFor,
     });
@@ -152,6 +152,7 @@ describeEmbeddedPostgres("run source issue binding on checkout (postgres)", () =
       runId,
       companyId,
       issueId: checkedOut,
+      agentId,
     });
 
     // Byte-identical: a task-bound run cannot claim the checked-out issue's
@@ -161,28 +162,28 @@ describeEmbeddedPostgres("run source issue binding on checkout (postgres)", () =
 
   it("leaves a taskId-only run scoped to its task", async () => {
     const taskId = randomUUID();
-    const { companyId, runId } = await seedRun({ taskId, wakeReason: "issue_comment" });
+    const { companyId, agentId, runId } = await seedRun({ taskId, wakeReason: "issue_comment" });
     const checkedOut = randomUUID();
 
-    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId: checkedOut });
+    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId: checkedOut, agentId });
 
     expect(await readSnapshot(runId)).toEqual({ taskId, wakeReason: "issue_comment" });
   });
 
   it("treats a blank issueId as unbound", async () => {
-    const { companyId, runId } = await seedRun({ triggeredBy: "system", issueId: "   " });
+    const { companyId, agentId, runId } = await seedRun({ triggeredBy: "system", issueId: "   " });
     const issueId = randomUUID();
 
-    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId });
+    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId, agentId });
 
     expect(await readSnapshot(runId)).toEqual({ triggeredBy: "system", issueId });
   });
 
   it("binds a run whose contextSnapshot is null", async () => {
-    const { companyId, runId } = await seedRun(null);
+    const { companyId, agentId, runId } = await seedRun(null);
     const issueId = randomUUID();
 
-    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId });
+    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId, agentId });
 
     expect(await readSnapshot(runId)).toEqual({ issueId });
   });
@@ -195,10 +196,54 @@ describeEmbeddedPostgres("run source issue binding on checkout (postgres)", () =
       runId: other.runId,
       companyId: randomUUID(),
       issueId,
+      agentId: other.agentId,
     });
 
     expect(bound).toBeNull();
     expect(await readSnapshot(other.runId)).toEqual({ triggeredBy: "system" });
     await db.delete(heartbeatRuns).where(and(eq(heartbeatRuns.id, other.runId)));
+  });
+
+  it("does not bind another agent's run or a second run of the same agent", async () => {
+    const { companyId, agentId, runId } = await seedRun({ triggeredBy: "system" });
+    const otherAgentId = randomUUID();
+    const otherRunId = randomUUID();
+    const sameAgentOtherRun = randomUUID();
+    await db.insert(agents).values({
+      id: otherAgentId,
+      companyId,
+      name: "Other agent",
+      role: "engineer",
+    });
+    await db.insert(heartbeatRuns).values([
+      {
+        id: otherRunId,
+        companyId,
+        agentId: otherAgentId,
+        status: "running",
+        contextSnapshot: { triggeredBy: "system" },
+      },
+      {
+        id: sameAgentOtherRun,
+        companyId,
+        agentId,
+        status: "running",
+        contextSnapshot: { triggeredBy: "system" },
+      },
+    ] as typeof heartbeatRuns.$inferInsert[]);
+    const issueId = randomUUID();
+
+    const stolen = await bindRunSourceIssueToCheckout(db, {
+      runId: otherRunId,
+      companyId,
+      issueId,
+      agentId,
+    });
+    await bindRunSourceIssueToCheckout(db, { runId, companyId, issueId, agentId });
+
+    expect(stolen).toBeNull();
+    expect(await readSnapshot(otherRunId)).toEqual({ triggeredBy: "system" });
+    expect(await readSnapshot(sameAgentOtherRun)).toEqual({ triggeredBy: "system" });
+    expect(await readSnapshot(runId)).toMatchObject({ issueId });
   });
 });

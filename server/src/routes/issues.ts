@@ -15168,6 +15168,7 @@ export function issueRoutes(
             runId: checkoutRunId,
             companyId: updated.companyId,
             issueId: updated.id,
+            agentId: req.body.agentId,
           });
         } catch (err) {
           // The checkout itself is committed and must not fail because of this.

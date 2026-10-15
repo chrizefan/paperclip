@@ -35,7 +35,7 @@ export function readRunSourceIssueId(contextSnapshot: unknown) {
  */
 export async function bindRunSourceIssueToCheckout(
   db: Db,
-  input: { runId: string; companyId: string; issueId: string },
+  input: { runId: string; companyId: string; issueId: string; agentId: string },
 ) {
   const [bound] = await db
     .update(heartbeatRuns)
@@ -52,6 +52,7 @@ export async function bindRunSourceIssueToCheckout(
       and(
         eq(heartbeatRuns.id, input.runId),
         eq(heartbeatRuns.companyId, input.companyId),
+        eq(heartbeatRuns.agentId, input.agentId),
       ),
     )
     .returning({ id: heartbeatRuns.id, contextSnapshot: heartbeatRuns.contextSnapshot });
