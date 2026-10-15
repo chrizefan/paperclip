@@ -2010,7 +2010,7 @@ describe.sequential("agent permission routes", () => {
       expect(res.status).toBe(403);
       expect(mockAccessService.decide).toHaveBeenCalledWith(expect.objectContaining({
         action: "agent_config:read",
-        resource: { type: "company", companyId },
+        resource: { type: "agent", companyId, agentId: peerAgentId },
       }));
     });
 
@@ -2051,7 +2051,41 @@ describe.sequential("agent permission routes", () => {
       expect(res.status).toBe(200);
       expect(mockAccessService.decide).toHaveBeenCalledWith(expect.objectContaining({
         action: "agent_config:read",
-        resource: { type: "company", companyId },
+        resource: { type: "agent", companyId, agentId: peerAgentId },
+      }));
+    });
+
+    it("reads agent resource so a self read reaches the allow_self rule", async () => {
+      // Regression test for DIG-2328 defect 1: per-agent read routes must
+      // decide with { type: "agent", agentId } so the authorization
+      // service's allow_self rule can apply. A company-scoped resource
+      // bypasses that rule and refuses the calling agent's own read.
+      mockAgentService.getById.mockImplementation(async (id: string) => {
+        if (id === agentId) {
+          return { ...baseAgent, permissions: { canCreateAgents: false } };
+        }
+        return null;
+      });
+      mockAccessService.decide.mockResolvedValue({
+        allowed: true,
+        reason: "allow_self",
+        explanation: "Allowed because the actor is reading its own agent configuration.",
+      });
+
+      const app = await createApp({
+        type: "agent",
+        agentId,
+        companyId,
+        runId: "run-1",
+        source: "agent_key",
+      });
+
+      const res = await request(app).get(`/api/agents/${agentId}/configuration`);
+
+      expect(res.status).toBe(200);
+      expect(mockAccessService.decide).toHaveBeenCalledWith(expect.objectContaining({
+        action: "agent_config:read",
+        resource: { type: "agent", companyId, agentId },
       }));
     });
   });
