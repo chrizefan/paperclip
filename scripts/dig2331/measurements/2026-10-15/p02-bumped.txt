@@ -1,0 +1,4 @@
+scope            : WHOLE FILE (sites 65 src / 71 dist)
+diagonal pairs   : 65  (dist surplus 6)
+guard EXACT      : 6
+guard WRONG      : 59

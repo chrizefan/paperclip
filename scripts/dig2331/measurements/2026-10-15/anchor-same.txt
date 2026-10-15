@@ -1,0 +1,9 @@
+source            : /Users/chrisstefan/Code/wt-dig2331-anchor/server/src/services/recovery/service.ts
+dist              : /Users/chrisstefan/.paperclip/cli/current/node_modules/@paperclipai/server/dist/services/recovery/service.js
+skip sites        : source 65 / dist 65
+placements        : 65
+dropped (source)  : 0
+new (dist)        : 0
+content-proven    : 29
+order-resolved    : 36
+OK: 65 placement(s); 29 content-proven, 36 order-resolved (confirm those by hand -- rerun with --ambiguous).

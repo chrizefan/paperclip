@@ -1,0 +1,37 @@
+== SOURCE : 65 sites, 35 distinct guards
+   15  updated
+    6  outcome==="escalated"
+    6  queued
+    5  await isInvocationBudgetBlocked(issue,agentId)
+    2  await isAutomaticRecoverySuppressedByPauseHold(db,issue.companyId,issue.id,treeControlSvc)
+    2  !agentInvokable
+    1  requiresExecutionReconciliation(action.cause)
+    1  <NULL>
+    1  !(await instanceSettingsService(db).getExperimental()).enableAgentChat
+    1  isWaitingConversation(issue)
+    1  !agentId
+    1  unfinishedGoalBindings.has(`${issue.companyId}:${issue.id}:${agentId}`)
+    1  issue.conversationAgentId&&latestRun?.status==="succeeded"&&parseObject(latestRun.resultJson).fi
+    1  agent?.status==="paused"&&agent.companyId===issue.companyId&&(await hasCurrentNativePassiveWait(
+== DIST : 65 sites, 35 distinct guards
+   15  updated
+    6  outcome==="escalated"
+    6  queued
+    5  await isInvocationBudgetBlocked(issue,agentId)
+    2  await isAutomaticRecoverySuppressedByPauseHold(db,issue.companyId,issue.id,treeControlSvc)
+    2  !agentInvokable
+    1  requiresExecutionReconciliation(action.cause)
+    1  <NULL>
+    1  !(await instanceSettingsService(db).getExperimental()).enableAgentChat
+    1  isWaitingConversation(issue)
+    1  !agentId
+    1  unfinishedGoalBindings.has(`${issue.companyId}:${issue.id}:${agentId}`)
+    1  issue.conversationAgentId&&latestRun?.status==="succeeded"&&parseObject(latestRun.resultJson).fi
+    1  agent?.status==="paused"&&agent.companyId===issue.companyId&&(await hasCurrentNativePassiveWait(
+== CROSS-TREE AGREEMENT
+  union of guard keys : 35
+  src-only keys       : 0
+  dist-only keys      : 0
+  buckets agreeing    : 35   disagreeing: 0
+  bucket-size hist    : 1->29  2->2  5->1  6->2  15->1
+  sites in size-1 buckets: 29 / 65   (must equal source-anchor's content-proven count)
