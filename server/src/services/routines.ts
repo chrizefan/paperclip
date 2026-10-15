@@ -1042,6 +1042,19 @@ export function routineService(
     if (parentIssue.companyId !== companyId) throw unprocessable("Parent issue must belong to same company");
   }
 
+  // DIG-3729: a standing issue must be a visible issue of the same company. Its status is
+  // deliberately NOT constrained: pointing a routine at a done or cancelled issue is
+  // exactly the case the append-and-notify arm reopens.
+  async function assertStandingIssue(companyId: string, issueId: string) {
+    const standing = await db
+      .select({ id: issues.id, companyId: issues.companyId })
+      .from(issues)
+      .where(and(eq(issues.id, issueId), visibleIssueCondition()))
+      .then((rows) => rows[0] ?? null);
+    if (!standing) throw notFound("Standing issue not found");
+    if (standing.companyId !== companyId) throw unprocessable("Standing issue must belong to same company");
+  }
+
   async function assertRoutineFolder(companyId: string, folderId: string | null | undefined) {
     if (!folderId) return;
     const folder = await db
@@ -1571,6 +1584,109 @@ export function routineService(
       .then((rows) => rows[0]?.issues ?? null);
   }
 
+  // DIG-3729: resolve a routine's standing issue by primary key.
+  //
+  // Deliberately NOT createRoutineDispatchFingerprint. That fingerprint covers
+  // routine_revision_id and routine_env_fingerprint, so editing a routine orphans the
+  // match and a periodic routine silently starts minting one duplicate issue per firing
+  // again. The standing issue id does not move.
+  //
+  // Any status is accepted, including terminal ones: a terminal standing issue is what
+  // appendStandingIssueTickNotice reopens. It is also not required to carry
+  // origin_kind="routine_execution" — it is an operator-chosen issue, often a parent or a
+  // hand-made tracker issue rather than a row this executor created.
+  async function resolveStandingIssue(
+    routine: typeof routines.$inferSelect,
+    executor: Db = db,
+  ) {
+    if (!routine.standingIssueId) return null;
+    const [row] = await executor
+      .select({
+        id: issues.id,
+        status: issues.status,
+        assigneeAgentId: issues.assigneeAgentId,
+        statusVersion: issues.statusVersion,
+      })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, routine.companyId),
+          eq(issues.id, routine.standingIssueId),
+          visibleIssueCondition(),
+        ),
+      )
+      .limit(1);
+    return row ?? null;
+  }
+
+  function standingIssueTickCommentBody(
+    input: { runId: string; triggeredAt: Date; routineTitle: string; runStatus: string },
+    outcome: { status: string; reopenedFromTerminal: boolean },
+  ) {
+    const lines = [
+      `Routine tick - ${input.routineTitle}`,
+      "",
+      `Triggered at ${input.triggeredAt.toISOString()}. Routine run ${input.runId}, recorded as ${input.runStatus}.`,
+    ];
+    if (outcome.reopenedFromTerminal) {
+      lines.push(
+        `The standing issue was in a terminal status and was reopened to ${outcome.status} for this tick.`,
+      );
+    }
+    lines.push(
+      "",
+      "Appended by the routine dispatcher. This issue is the routine's standing issue, so every firing lands here instead of creating a new issue.",
+    );
+    return lines.join("\n");
+  }
+
+  // DIG-3729: one tick of append-and-notify against the standing issue.
+  //
+  // Reopens a terminal standing issue, then appends the tick as a comment authored by the
+  // routine. It is never authored by the assignee: a comment from the assignee is a self
+  // comment and would wake nobody.
+  //
+  // completedAt is deliberately left alone. It is the standing issue's record that an
+  // earlier tick ran, so clearing it on every reopen would erase the only evidence the
+  // issue carries. issueSvc.update cannot be used for the reopen because it nulls
+  // completedAt whenever the new status is not "done".
+  //
+  // cancelledAt IS cleared, but only when reopening a cancelled issue: isNull(cancelledAt)
+  // gates membership of the live pipelines, so a reopened issue that kept the flag would
+  // stay invisible to them.
+  async function appendStandingIssueTickNotice(
+    executor: Db,
+    standing: { id: string; status: string; assigneeAgentId: string | null; statusVersion: number },
+    input: { runId: string; triggeredAt: Date; routineTitle: string; runStatus: string },
+  ) {
+    const reopenedFromTerminal = TERMINAL_ISSUE_STATUSES.has(standing.status);
+    const status = reopenedFromTerminal ? "todo" : standing.status;
+    if (reopenedFromTerminal) {
+      await executor
+        .update(issues)
+        .set({
+          status,
+          ...(standing.status === "cancelled" ? { cancelledAt: null } : {}),
+          statusVersion: standing.statusVersion + 1,
+          updatedAt: input.triggeredAt,
+        })
+        .where(eq(issues.id, standing.id));
+    }
+    const comment = await issueSvc.addComment(
+      standing.id,
+      standingIssueTickCommentBody(input, { status, reopenedFromTerminal }),
+      {},
+      { authorType: "system" },
+      executor,
+    );
+    return {
+      issueId: standing.id,
+      commentId: comment.id,
+      assigneeAgentId: standing.assigneeAgentId,
+      status,
+    };
+  }
+
   async function finalizeRun(runId: string, patch: Partial<typeof routineRuns.$inferInsert>, executor: Db = db) {
     return executor
       .update(routineRuns)
@@ -1786,6 +1902,24 @@ export function routineService(
       description,
     });
     let reusedExistingRun = false;
+    // DIG-3729: the wake for a standing-issue tick is queued AFTER this transaction commits.
+    // Appending the comment takes a row lock on the standing issue, and the dispatcher writes
+    // execution_run_id on that same row from the outer pool, so queueing the wake inside the
+    // transaction deadlocks the two against each other.
+    // Declared without an initialiser on purpose. TypeScript does not see the assignment made
+    // inside the transaction callback below, so a `= null` initialiser narrows this variable to
+    // `null` for the whole function and the post-commit read becomes `never`. Carrying
+    // `undefined` in the declared type keeps the definite-assignment check quiet without an
+    // initialiser, so the only narrowing left is the truthiness test at the read site.
+    let standingTick:
+      | {
+          issueId: string;
+          assigneeAgentId: string | null;
+          status: string;
+          commentId: string;
+        }
+      | null
+      | undefined;
     const run = await db.transaction(async (tx) => {
       const txDb = tx as unknown as Db;
       await tx.execute(
@@ -1872,6 +2006,54 @@ export function routineService(
 
       let createdIssue: Awaited<ReturnType<typeof issueSvc.create>> | null = null;
       try {
+        // DIG-3729: a routine with a standing issue reuses that issue on every firing.
+        // This arm sits ahead of findLiveExecutionIssue so the standing issue wins the
+        // reuse decision; when no standing issue is set the fingerprint-based lookup below
+        // is unchanged. always_enqueue still mints, because that policy says "never reuse".
+        if (input.routine.concurrencyPolicy !== "always_enqueue") {
+          const standingIssue = await resolveStandingIssue(input.routine, txDb);
+          if (standingIssue) {
+            const status = input.routine.concurrencyPolicy === "skip_if_active" ? "skipped" : "coalesced";
+            if (manualRunnerUserId) {
+              await touchIssueForUserInbox(txDb, {
+                companyId: input.routine.companyId,
+                issueId: standingIssue.id,
+                userId: manualRunnerUserId,
+                touchedAt: triggeredAt,
+              });
+            }
+            const notice = await appendStandingIssueTickNotice(txDb, standingIssue, {
+              runId: createdRun.id,
+              triggeredAt,
+              routineTitle: title,
+              runStatus: status,
+            });
+            // Keep the dispatch lock until the tick is linked to a queued heartbeat run.
+            // A comment that wakes nobody is indistinguishable from a dropped tick, which
+            // is the exact failure this arm exists to remove. The wake itself is queued
+            // after the transaction commits; see standingTick above.
+            standingTick = {
+              issueId: notice.issueId,
+              assigneeAgentId: notice.assigneeAgentId,
+              status: notice.status,
+              commentId: notice.commentId,
+            };
+            const updated = await finalizeRun(createdRun.id, {
+              status,
+              linkedIssueId: standingIssue.id,
+              completedAt: triggeredAt,
+            }, txDb);
+            await updateRoutineTouchedState({
+              routineId: input.routine.id,
+              triggerId: input.trigger?.id ?? null,
+              triggeredAt,
+              status,
+              issueId: standingIssue.id,
+              nextRunAt,
+            }, txDb);
+            return updated ?? createdRun;
+          }
+        }
         const activeIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
           kind: issueOriginKind,
           id: issueOriginId,
@@ -2013,6 +2195,35 @@ export function routineService(
         return failed ?? createdRun;
       }
     });
+
+    // DIG-3729: queue the standing-issue tick's comment wake now that the dispatch
+    // transaction has committed and released its lock on the standing issue. A tick whose
+    // wake cannot be queued is failed, exactly like the in-transaction create path.
+    if (standingTick) {
+      try {
+        await queueIssueAssignmentWakeup({
+          heartbeat,
+          issue: {
+            id: standingTick.issueId,
+            assigneeAgentId: standingTick.assigneeAgentId,
+            status: standingTick.status,
+          },
+          reason: "issue_commented",
+          mutation: "comment",
+          contextSource: "routine.dispatch",
+          wakeCommentId: standingTick.commentId,
+          requestedByActorType: input.source === "schedule" ? "system" : undefined,
+          rethrowOnError: true,
+        });
+      } catch (error) {
+        await finalizeRun(run.id, {
+          status: "failed",
+          failureReason: error instanceof Error ? error.message : String(error),
+          completedAt: new Date(),
+        });
+        throw error;
+      }
+    }
 
     if (!reusedExistingRun && (input.source === "schedule" || input.source === "webhook")) {
       const actorId = input.source === "schedule" ? "routine-scheduler" : "routine-webhook";
@@ -2218,6 +2429,9 @@ export function routineService(
       if (!responsibleUserId) {
         throw unprocessable("Routine requires a responsible user");
       }
+      if (input.standingIssueId) {
+        await assertStandingIssue(companyId, input.standingIssueId);
+      }
       const createdRoutine = await db.transaction(async (tx) => {
         const txDb = tx as unknown as Db;
         const [created] = await txDb
@@ -2228,6 +2442,7 @@ export function routineService(
             folderId: input.folderId ?? null,
             goalId: input.goalId ?? null,
             parentIssueId: input.parentIssueId ?? null,
+            standingIssueId: input.standingIssueId ?? null,
             title: input.title,
             description: input.description ?? null,
             assigneeAgentId: input.assigneeAgentId ?? null,
@@ -2267,6 +2482,8 @@ export function routineService(
       if (!existing) return null;
       const nextProjectId = patch.projectId === undefined ? existing.projectId : patch.projectId;
       const nextFolderId = patch.folderId === undefined ? existing.folderId : patch.folderId;
+      const nextStandingIssueId =
+        patch.standingIssueId === undefined ? existing.standingIssueId : patch.standingIssueId;
       const nextAssigneeAgentId = patch.assigneeAgentId === undefined ? existing.assigneeAgentId : patch.assigneeAgentId;
       const nextTitle = patch.title ?? existing.title;
       const nextDescription = patch.description === undefined ? existing.description : patch.description;
@@ -2291,6 +2508,7 @@ export function routineService(
       );
       if (patch.projectId !== undefined) await assertProject(existing.companyId, nextProjectId);
       if (patch.folderId !== undefined) await assertRoutineFolder(existing.companyId, nextFolderId);
+      if (patch.standingIssueId) await assertStandingIssue(existing.companyId, patch.standingIssueId);
       if (patch.assigneeAgentId !== undefined || patch.status === "active") {
         await assertAssignableAgent(db, existing.companyId, nextAssigneeAgentId, { kind: "routine" });
       }
@@ -2344,6 +2562,7 @@ export function routineService(
           folderId: nextFolderId,
           goalId: patch.goalId === undefined ? locked.goalId : patch.goalId,
           parentIssueId: patch.parentIssueId === undefined ? locked.parentIssueId : patch.parentIssueId,
+          standingIssueId: nextStandingIssueId,
           title: nextTitle,
           description: nextDescription,
           assigneeAgentId: nextAssigneeAgentId,
@@ -2361,12 +2580,17 @@ export function routineService(
         };
 
         const folderChanged = patch.folderId !== undefined && locked.folderId !== candidate.folderId;
+        // standingIssueId is an operational pointer, exactly like folderId: changing it
+        // must not mint a routine revision, and must not be blocked by one being absent.
+        const standingIssueChanged =
+          patch.standingIssueId !== undefined && locked.standingIssueId !== candidate.standingIssueId;
         if (locked.latestRevisionId && routineCurrentFieldsMatch(locked, candidate)) {
-          if (!folderChanged) return locked;
+          if (!folderChanged && !standingIssueChanged) return locked;
           const [updated] = await txDb
             .update(routines)
             .set({
               folderId: candidate.folderId,
+              standingIssueId: candidate.standingIssueId,
               updatedByAgentId: actor.agentId ?? null,
               updatedByUserId: actor.userId ?? null,
               updatedAt: new Date(),
@@ -2409,6 +2633,7 @@ export function routineService(
             folderId: candidate.folderId,
             goalId: candidate.goalId,
             parentIssueId: candidate.parentIssueId,
+            standingIssueId: candidate.standingIssueId,
             title: candidate.title,
             description: candidate.description,
             assigneeAgentId: candidate.assigneeAgentId,

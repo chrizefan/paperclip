@@ -67,6 +67,9 @@ export const createRoutineSchema = z.object({
   folderId: z.string().guid().optional().nullable(),
   goalId: z.string().guid().optional().nullable(),
   parentIssueId: z.string().guid().optional().nullable(),
+  // DIG-3729: opt-in only. Absent means the routine mints one issue per firing, exactly as
+  // before, so an upgrade never silently converts a periodic routine into a standing one.
+  standingIssueId: z.string().guid().optional().nullable(),
   title: z.string().trim().min(1).max(200),
   description: z.string().optional().nullable(),
   assigneeAgentId: z.string().guid().optional().nullable(),

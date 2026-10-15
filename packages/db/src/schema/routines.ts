@@ -29,6 +29,11 @@ export const routines = pgTable(
     folderId: uuid("folder_id").references(() => folders.id, { onDelete: "set null" }),
     goalId: uuid("goal_id").references(() => goals.id, { onDelete: "set null" }),
     parentIssueId: uuid("parent_issue_id").references(() => issues.id, { onDelete: "set null" }),
+    // DIG-3729: a stable pointer to the issue every tick appends to. It is an
+    // operational pointer, not authored content, so it is deliberately absent from the
+    // routine revision snapshot (same as folderId): pointing a routine at an issue must
+    // not mint a revision or orphan the match the way an env/revision fingerprint does.
+    standingIssueId: uuid("standing_issue_id").references(() => issues.id, { onDelete: "set null" }),
     title: text("title").notNull(),
     description: text("description"),
     assigneeAgentId: uuid("assignee_agent_id").references(() => agents.id),
@@ -61,6 +66,7 @@ export const routines = pgTable(
     companyFolderIdx: index("routines_company_folder_idx").on(table.companyId, table.folderId),
     companyResponsibleUserIdx: index("routines_company_responsible_user_idx").on(table.companyId, table.responsibleUserId),
     companyOriginIdx: index("routines_company_origin_idx").on(table.companyId, table.originKind, table.originId),
+    standingIssueIdx: index("routines_standing_issue_idx").on(table.standingIssueId),
   }),
 );
 
