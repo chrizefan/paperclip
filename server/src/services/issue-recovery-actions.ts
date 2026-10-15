@@ -238,6 +238,41 @@ export function issueRecoveryActionService(db: Db) {
     return action;
   }
 
+
+  /**
+   * Latest recovery action for an issue and cause, whatever its lifecycle status.
+   *
+   * `getActiveForIssue` answers "does a recovery own this issue right now",
+   * which is the wrong question for "did this escalation already happen": an
+   * action can be resolved and the issue re-armed inside the same instant, after
+   * which the active lookup returns null. Filters on `cause` rather than
+   * `fingerprint` so the caller never reproduces a fingerprint format owned by
+   * another module, where format drift would silently restore the repeat.
+   *
+   * Native run activity is not projected here: this runs on a hot sweep path and
+   * the caller only reads the persisted evidence.
+   */
+  async function getLatestForIssueAndCause(
+    companyId: string,
+    sourceIssueId: string,
+    cause: string,
+    dbOrTx: DbOrTransaction = db,
+  ): Promise<IssueRecoveryAction | null> {
+    const row = await dbOrTx
+      .select()
+      .from(issueRecoveryActions)
+      .where(
+        and(
+          eq(issueRecoveryActions.companyId, companyId),
+          eq(issueRecoveryActions.sourceIssueId, sourceIssueId),
+          eq(issueRecoveryActions.cause, cause),
+        ),
+      )
+      .orderBy(desc(issueRecoveryActions.updatedAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return row ? toReadModel(row) : null;
+  }
   async function listActiveForIssues(companyId: string, sourceIssueIds: string[]) {
     if (sourceIssueIds.length === 0) return new Map<string, IssueRecoveryAction>();
     const rows = await db
@@ -569,6 +604,7 @@ export function issueRecoveryActionService(db: Db) {
 
   return {
     getActiveForIssue,
+    getLatestForIssueAndCause,
     listActiveForIssues,
     resolveActiveForIssue,
     upsertSourceScoped,

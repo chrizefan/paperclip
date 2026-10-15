@@ -6052,6 +6052,144 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     ).toBe(true);
   });
 
+
+  it("does not escalate the same handoff twice after its action is resolved and the issue is re-armed", async () => {
+    // The field report: a successful in_progress write was reverted to blocked
+    // ~17s later by this same sweep, because the recovery action had been
+    // resolved milliseconds earlier and no guard still tied the escalation to
+    // the handoff that caused it. One escalation per handoff attempt is the
+    // invariant that was missing.
+    const { companyId, agentId, runId, issueId } =
+      await seedStrandedIssueFixture({
+        status: "in_progress",
+        runStatus: "failed",
+        runErrorCode: "adapter_failed",
+        runError: "adapter failed",
+      });
+    const sourceRunId = randomUUID();
+    await db
+      .update(heartbeatRuns)
+      .set({
+        contextSnapshot: {
+          issueId,
+          taskId: issueId,
+          wakeReason: "finish_successful_run_handoff",
+          sourceRunId,
+          resumeFromRunId: sourceRunId,
+          handoffRequired: true,
+          handoffReason: "successful_run_missing_state",
+          missingDisposition: "clear_next_step",
+          handoffAttempt: 1,
+          maxHandoffAttempts: 1,
+        },
+      })
+      .where(eq(heartbeatRuns.id, runId));
+    const heartbeat = heartbeatService(db);
+
+    const first = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(first.successfulRunHandoffEscalated).toBe(1);
+    expect(
+      (await db.select().from(issues).where(eq(issues.id, issueId)))[0].status,
+    ).toBe("blocked");
+
+    // The escalation record is keyed on the corrective run, so prove the field
+    // the guard reads is actually persisted rather than assumed.
+    const escalatedRows = await db
+      .select()
+      .from(issueRecoveryActions)
+      .where(eq(issueRecoveryActions.sourceIssueId, issueId));
+    expect(escalatedRows).toHaveLength(1);
+    expect(escalatedRows[0]?.evidence).toMatchObject({ correctiveRunId: runId });
+
+    // Resolve the action and re-arm the issue: the board-owned guard no longer
+    // holds anything, which is exactly how the repeat got through.
+    await db
+      .update(issueRecoveryActions)
+      .set({ status: "resolved", resolvedAt: new Date() })
+      .where(eq(issueRecoveryActions.sourceIssueId, issueId));
+    await db
+      .update(issues)
+      .set({ status: "in_progress" })
+      .where(eq(issues.id, issueId));
+
+    const second = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(second.successfulRunHandoffEscalated).toBe(0);
+    expect(second.escalated).toBe(0);
+    expect(
+      (await db.select().from(issues).where(eq(issues.id, issueId)))[0].status,
+    ).toBe("in_progress");
+    expect(
+      await db
+        .select()
+        .from(issueRecoveryActions)
+        .where(eq(issueRecoveryActions.sourceIssueId, issueId)),
+    ).toHaveLength(1);
+    const notices = await db
+      .select()
+      .from(issueComments)
+      .where(eq(issueComments.issueId, issueId));
+    expect(
+      notices.filter(
+        (comment) => comment.body === SUCCESSFUL_RUN_HANDOFF_EXHAUSTED_NOTICE_BODY,
+      ),
+    ).toHaveLength(1);
+    expect(companyId).toBeTruthy();
+    expect(agentId).toBeTruthy();
+  });
+
+  it("escalates again once the persisted record belongs to an earlier handoff", async () => {
+    // Counter-arm on the live path: the guard must not become "never escalate".
+    const { runId, issueId } = await seedStrandedIssueFixture({
+      status: "in_progress",
+      runStatus: "failed",
+      runErrorCode: "adapter_failed",
+      runError: "adapter failed",
+    });
+    const sourceRunId = randomUUID();
+    await db
+      .update(heartbeatRuns)
+      .set({
+        contextSnapshot: {
+          issueId,
+          taskId: issueId,
+          wakeReason: "finish_successful_run_handoff",
+          sourceRunId,
+          resumeFromRunId: sourceRunId,
+          handoffRequired: true,
+          handoffReason: "successful_run_missing_state",
+          missingDisposition: "clear_next_step",
+          handoffAttempt: 1,
+          maxHandoffAttempts: 1,
+        },
+      })
+      .where(eq(heartbeatRuns.id, runId));
+    const heartbeat = heartbeatService(db);
+
+    const first = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(first.successfulRunHandoffEscalated).toBe(1);
+
+    await db
+      .update(issueRecoveryActions)
+      .set({ status: "resolved", resolvedAt: new Date() })
+      .where(eq(issueRecoveryActions.sourceIssueId, issueId));
+    await db
+      .update(issues)
+      .set({ status: "in_progress" })
+      .where(eq(issues.id, issueId));
+    // The surviving action row records an older corrective run, so this
+    // handoff has not been escalated yet.
+    await db
+      .update(issueRecoveryActions)
+      .set({ evidence: { correctiveRunId: randomUUID() } })
+      .where(eq(issueRecoveryActions.sourceIssueId, issueId));
+
+    const second = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(second.successfulRunHandoffEscalated).toBe(1);
+    expect(
+      (await db.select().from(issues).where(eq(issues.id, issueId)))[0].status,
+    ).toBe("blocked");
+    expect(runId).toBeTruthy();
+  });
   it("retries an interrupted corrective successful-run handoff instead of escalating it", async () => {
     // A graceful server shutdown (a deploy restart) interrupted the single
     // corrective run before the agent could choose a disposition. That is

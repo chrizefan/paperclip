@@ -574,3 +574,28 @@ export function decideSuccessfulRunHandoff(input: {
     }, "normal_model"),
   };
 }
+
+/**
+ * True when this exact handoff attempt has already been escalated.
+ *
+ * The persisted evidence of a recovery action carries the `correctiveRunId` of
+ * the handoff that created it, so it answers "did this attempt already
+ * escalate" durably, which an active-action lookup cannot: the action may have
+ * been resolved in the same instant the issue was re-armed.
+ *
+ * Returns false when there is no prior record, so a first escalation is never
+ * suppressed, and when the persisted value is missing or not a string, so a
+ * malformed row cannot suppress an escalation.
+ */
+export function isSuccessfulRunHandoffAlreadyEscalated(input: {
+  correctiveRunId: string | null | undefined;
+  persistedEvidence: Record<string, unknown> | null | undefined;
+}): boolean {
+  const correctiveRunId = typeof input.correctiveRunId === "string" ? input.correctiveRunId.trim() : "";
+  if (!correctiveRunId) return false;
+  const evidence = input.persistedEvidence;
+  if (!evidence || typeof evidence !== "object") return false;
+  const priorCorrectiveRunId = evidence.correctiveRunId;
+  if (typeof priorCorrectiveRunId !== "string") return false;
+  return priorCorrectiveRunId.trim() === correctiveRunId;
+}
