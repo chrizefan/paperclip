@@ -33,6 +33,7 @@ import { ONBOARDING_FIRST_TASK_ORIGIN_KIND } from "@paperclipai/shared";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { issueService } from "../services/issues.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
+import { evaluateIssueThreadInteractionResolverAudience } from "../services/issue-thread-interaction-resolution.js";
 import { agentService } from "../services/agents.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -1094,6 +1095,53 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       });
     },
   );
+
+  it("rejects a paused request_confirmation addressee", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Reject paused confirmation addressee");
+    const creatorAgentId = randomUUID();
+    const addresseeAgentId = randomUUID();
+    await db.insert(agents).values([
+      { id: creatorAgentId, companyId, name: "Creator", role: "engineer", status: "active" },
+      { id: addresseeAgentId, companyId, name: "Paused reviewer", role: "engineer", status: "paused" },
+    ]);
+    await expect(interactionsSvc.create(
+      { id: issueId, companyId },
+      { kind: "request_confirmation", addresseeAgentId, payload: { version: 1, prompt: "Approve?" } },
+      { agentId: creatorAgentId },
+    )).rejects.toMatchObject({
+      status: 422,
+      message: expect.stringContaining("invokable agent"),
+      details: expect.objectContaining({ reason: "paused" }),
+    });
+  });
+
+  it("names the eligible resolvers when the addressee paused after creation", () => {
+    expect(evaluateIssueThreadInteractionResolverAudience({
+      actor: { type: "agent", agentId: "agent-other", runId: "run-other" },
+      interaction: { createdByAgentId: "agent-creator", addresseeAgentId: "agent-paused", effectiveResolverPolicy: "anyone" },
+      addresseeInvokability: { invokable: false, reason: "paused" },
+    })).toMatchObject({
+      allowed: false, status: 403, code: "interaction_addressee_unavailable",
+      details: expect.objectContaining({ addresseeAgentId: "agent-paused", reason: "paused",
+        eligibleResolvers: ["human_user_override", "creator_withdraw_and_retarget"] }),
+    });
+  });
+
+  it("keeps the mismatch path when the snapshot reports invokable", () => {
+    expect(evaluateIssueThreadInteractionResolverAudience({
+      actor: { type: "agent", agentId: "agent-1", runId: "run-1" },
+      interaction: { createdByAgentId: "agent-creator", addresseeAgentId: "agent-2", effectiveResolverPolicy: "anyone" },
+      addresseeInvokability: { invokable: true },
+    })).toMatchObject({ allowed: false, code: "interaction_addressee_mismatch" });
+  });
+
+  it("still lets a human resolve a card addressed to a paused agent", () => {
+    expect(evaluateIssueThreadInteractionResolverAudience({
+      actor: { type: "user", userId: "human-1" },
+      interaction: { addresseeAgentId: "agent-paused", effectiveResolverPolicy: "anyone" },
+      addresseeInvokability: { invokable: false, reason: "paused" },
+    })).toMatchObject({ allowed: true, reason: "allow_human_override" });
+  });
 
   it("rejects interaction addressees with an invalid reporting chain", async () => {
     const { companyId, issueId } = await seedConfirmationIssue("Reject uninvokable addressee chain");
