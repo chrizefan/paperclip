@@ -12,6 +12,7 @@ export const ISSUE_THREAD_INTERACTION_RESOLUTION_DENIAL_CODES = [
   "interaction_human_only",
   "interaction_creator_excluded",
   "interaction_addressee_mismatch",
+  "interaction_addressee_unavailable",
   "interaction_stale_target",
   "interaction_superseded",
   "interaction_already_resolved",
@@ -58,6 +59,8 @@ export type IssueThreadInteractionResolverAudienceInput = {
     | IssueThreadInteractionCanonicalResolverPolicy
     | IssueThreadInteractionResolverRestriction
     | null;
+  /** Answer-time snapshot of the addressed agent's invokability; absent keeps the legacy path. */
+  addresseeInvokability?: { invokable: boolean; reason?: string } | null;
   governedAction?: boolean;
 };
 
@@ -77,6 +80,7 @@ export type IssueThreadInteractionResolverAudienceDecision =
         | "interaction_human_only"
         | "interaction_creator_excluded"
         | "interaction_addressee_mismatch"
+        | "interaction_addressee_unavailable"
         | "interaction_governed_action_denied"
         | "review_policy_denied"
       >;
@@ -269,12 +273,23 @@ export function evaluateIssueThreadInteractionResolverAudience(
     input.interaction.addresseeAgentId
     && input.interaction.addresseeAgentId !== input.actor.agentId
   ) {
+    const addresseeUnusable = input.addresseeInvokability?.invokable === false;
     return {
       allowed: false,
       effectiveResolverPolicy,
       status: 403,
-      code: "interaction_addressee_mismatch",
-      message: "Only the addressed agent or an authorized human may resolve this issue-thread interaction",
+      code: addresseeUnusable ? "interaction_addressee_unavailable" : "interaction_addressee_mismatch",
+      message: addresseeUnusable
+        ? "The addressed agent is no longer invokable; a human user may still resolve this interaction, or the creator may withdraw and re-target it"
+        : "Only the addressed agent or an authorized human may resolve this issue-thread interaction",
+      ...(addresseeUnusable
+        ? { details: {
+          addresseeAgentId: input.interaction.addresseeAgentId,
+          reason: input.addresseeInvokability?.reason ?? "unknown",
+          eligibleResolvers: ["human_user_override", "creator_withdraw_and_retarget"],
+          remediation: "Have a human user resolve it, or have the creator withdraw and re-target an invokable agent.",
+        } }
+        : {}),
     };
   }
 
