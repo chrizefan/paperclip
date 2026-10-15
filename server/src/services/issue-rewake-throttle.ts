@@ -119,10 +119,26 @@ export function isThrottleCandidateIssueRewake(input: IssueRewakeCandidateInput)
   return THROTTLED_ISSUE_REWAKE_REASONS.has(input.reason);
 }
 
+export const ISSUE_REWAKE_COMMENT_ONLY_ACTION = "issue.comment_added";
+
+/**
+ * Liveness states that prove a run did real work even when its only
+ * issue-visible artifact is a status comment (DIG-3744). Deliberately
+ * narrower than the handoff's productive set: `needs_followup`
+ * ("useful output but no concrete action evidence") is exactly the
+ * DIG-1575 state-check loop signature, so it must NOT reset the streak.
+ */
+export const ISSUE_REWAKE_PRODUCTIVE_LIVENESS_STATES: ReadonlySet<string> = new Set([
+  "advanced",
+  "completed",
+  "blocked",
+]);
+
 export interface RecentIssueRunSample {
   id: string;
   status: string;
   finishedAt: Date | null;
+  livenessState?: string | null;
 }
 
 export interface IssueRewakeThrottleInput {
@@ -131,6 +147,13 @@ export interface IssueRewakeThrottleInput {
   recentTerminalRuns: RecentIssueRunSample[];
   /** Runs among the sample that produced issue-visible progress. */
   runIdsWithIssueProgress: ReadonlySet<string>;
+  /**
+   * Runs with non-comment issue-visible progress (documents, work products,
+   * mutations, interactions). When supplied, a run whose only progress is
+   * `ISSUE_REWAKE_COMMENT_ONLY_ACTION` counts as progress only when its
+   * liveness is productive. Absent = legacy behaviour (any progress breaks).
+   */
+  runIdsWithStrongProgress?: ReadonlySet<string>;
   /** New issue input landed after the newest run finished. */
   hasNewIssueInputSinceLastRun: boolean;
 }
@@ -162,7 +185,22 @@ export function evaluateIssueRewakeThrottle(input: IssueRewakeThrottleInput): Is
     // A failed/cancelled/interrupted run breaks the streak: its follow-up is
     // recovery, not a redundant re-poll, and must not be delayed.
     if (run.status !== "succeeded" || !run.finishedAt) break;
-    if (input.runIdsWithIssueProgress.has(run.id)) break;
+    if (!input.runIdsWithIssueProgress.has(run.id)) {
+      noProgressStreak += 1;
+      continue;
+    }
+    // The run left issue-visible progress. When the caller distinguishes
+    // strong (non-comment) progress, a comment-only run is status chatter,
+    // not progress, unless its liveness proves real work (DIG-3744: 12
+    // identical "State check only" comments at ~60s intervals each reset
+    // the old streak). Legacy callers without the strong set keep the old
+    // behaviour: any progress breaks the streak.
+    if (input.runIdsWithStrongProgress === undefined) break;
+    if (input.runIdsWithStrongProgress.has(run.id)) break;
+    const liveness = run.livenessState;
+    // No liveness recorded (old rows): preserve legacy, treat as progress.
+    if (liveness === undefined) break;
+    if (liveness !== null && ISSUE_REWAKE_PRODUCTIVE_LIVENESS_STATES.has(liveness)) break;
     noProgressStreak += 1;
   }
 

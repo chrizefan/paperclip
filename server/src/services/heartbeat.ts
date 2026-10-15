@@ -388,6 +388,7 @@ import {
 import {
   ISSUE_NEW_INPUT_ACTIVITY_ACTIONS,
   ISSUE_PROGRESS_ACTIVITY_ACTIONS,
+  ISSUE_REWAKE_COMMENT_ONLY_ACTION,
   ISSUE_REWAKE_LOOKBACK_MS,
   ISSUE_REWAKE_RUN_SAMPLE_LIMIT,
   evaluateIssueRewakeThrottle,
@@ -28589,6 +28590,7 @@ export function heartbeatService(
                 id: heartbeatRuns.id,
                 status: heartbeatRuns.status,
                 finishedAt: heartbeatRuns.finishedAt,
+                livenessState: heartbeatRuns.livenessState,
               })
               .from(heartbeatRuns)
               .where(
@@ -28611,7 +28613,7 @@ export function heartbeatService(
                 (sampleRun) => sampleRun.id,
               );
               const progressRows = await tx
-                .select({ runId: activityLog.runId })
+                .select({ runId: activityLog.runId, action: activityLog.action })
                 .from(activityLog)
                 .where(
                   and(
@@ -28654,6 +28656,14 @@ export function heartbeatService(
                 recentTerminalRuns,
                 runIdsWithIssueProgress: new Set(
                   progressRows
+                    .map((row) => row.runId)
+                    .filter((runId): runId is string => Boolean(runId)),
+                ),
+                // Comment-only activity from a run that reports no concrete
+                // action evidence is status chatter, not progress (DIG-3744).
+                runIdsWithStrongProgress: new Set(
+                  progressRows
+                    .filter((row) => row.action !== ISSUE_REWAKE_COMMENT_ONLY_ACTION)
                     .map((row) => row.runId)
                     .filter((runId): runId is string => Boolean(runId)),
                 ),
