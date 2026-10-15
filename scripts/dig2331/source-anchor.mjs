@@ -61,8 +61,15 @@ const refusals = [];
 
 for (const [key, sArr] of srcB) {
   const dArr = distB.get(key) || [];
-  const n = Math.min(sArr.length, dArr.length);
-  for (let k = 0; k < n; k++) {
+  // An unequal bucket cannot be paired by position: the missing site may be
+  // in the middle, so the shared prefix is not a placement. Refuse the whole
+  // bucket and name every line on both sides.
+  if (sArr.length !== dArr.length) {
+    for (const s of sArr) dropped.push(s);
+    for (const d of dArr) added.push(d);
+    continue;
+  }
+  for (let k = 0; k < sArr.length; k++) {
     placements.push({
       src: sArr[k].line, dist: dArr[k].line,
       guard: key, ordinal: k,
@@ -70,10 +77,6 @@ for (const [key, sArr] of srcB) {
       // occurrence out of the group — only its position in the group can.
       resolvedBy: (sArr.length === 1 && dArr.length === 1) ? 'CONTENT' : 'ORDER',
     });
-  }
-  for (let k = n; k < sArr.length; k++) dropped.push(sArr[k]);
-  if (dArr.length > sArr.length) {
-    for (let k = sArr.length; k < dArr.length; k++) added.push(dArr[k]);
   }
 }
 for (const [key, dArr] of distB) {
