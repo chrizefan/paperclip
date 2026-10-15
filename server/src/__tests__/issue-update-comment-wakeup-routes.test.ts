@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ASSIGNEE_AGENT_ID = "11111111-1111-4111-8111-111111111111";
 const PREVIOUS_AGENT_ID = "22222222-2222-4222-8222-222222222222";
@@ -259,6 +259,14 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
 }
 
 describe("issue update comment wakeups", () => {
+  // The first import of the issue routes transforms a very large module graph. Pay
+  // that once here, outside the per-test timeout, so the first test does not time
+  // out under parallel load.
+  beforeAll(async () => {
+    registerModuleMocks();
+    await import("../routes/issues.js");
+  }, 120_000);
+
   beforeEach(() => {
     vi.resetModules();
     vi.doUnmock("../routes/issues.js");
