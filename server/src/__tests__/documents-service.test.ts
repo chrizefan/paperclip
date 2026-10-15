@@ -408,6 +408,30 @@ describeEmbeddedPostgres("documentService system issue documents", () => {
     );
   });
 
+  it("still deletes an existing uuid-keyed shadow row through its own document id", async () => {
+    const { issueId, plan, planIdShadow, keyOnlyShadow } = await createIssueWithUuidKeyedShadowDocuments();
+
+    // The list exposes each shadow's own documents.id, and a uuid ref resolves by
+    // document id, so the orphans stay repairable through the normal delete route.
+    const listed = await svc.listIssueDocuments(issueId, { includeSystem: true });
+    expect(listed.map((doc) => doc.id)).toEqual(
+      expect.arrayContaining([planIdShadow.documentId, keyOnlyShadow.documentId]),
+    );
+
+    expect(await svc.deleteIssueDocument(issueId, planIdShadow.documentId)).toEqual(
+      expect.objectContaining({ id: planIdShadow.documentId, key: plan!.id }),
+    );
+    expect(await svc.deleteIssueDocument(issueId, keyOnlyShadow.documentId)).toEqual(
+      expect.objectContaining({ id: keyOnlyShadow.documentId }),
+    );
+
+    const remaining = await svc.listIssueDocuments(issueId, { includeSystem: true });
+    expect(remaining.map((doc) => doc.id)).not.toEqual(
+      expect.arrayContaining([planIdShadow.documentId]),
+    );
+    expect(remaining.map((doc) => doc.key)).toContain("plan");
+  });
+
   it("restores a revision through a uuid document reference by document id", async () => {
     const { issueId, plan } = await createIssueWithUuidKeyedShadowDocuments();
     await svc.upsertIssueDocument({
