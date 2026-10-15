@@ -6,6 +6,13 @@ import {
   workProductService,
 } from "../services/work-products.ts";
 
+// The db here is a hand-rolled mock with no instance-settings table. The secret
+// write guard on these methods is covered against Postgres in
+// issue-work-product-secret-detection.test.ts.
+vi.mock("../services/secret-write-guard.js", () => ({
+  assertNoSecretWrite: vi.fn(async () => undefined),
+}));
+
 function createWorkProductRow(overrides: Partial<Record<string, unknown>> = {}) {
   const now = new Date("2026-03-17T00:00:00.000Z");
   return {
