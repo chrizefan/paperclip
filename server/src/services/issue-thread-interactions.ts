@@ -96,6 +96,7 @@ import {
 } from "@paperclipai/shared";
 import { z } from "zod";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
+import { assertNoSecretWrite } from "./secret-write-guard.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { authorizationService } from "./authorization.js";
 import { isCloudManagedInstance } from "./cloud-instance.js";
@@ -2603,6 +2604,10 @@ export function issueThreadInteractionService(
       },
     ) => {
       const payload = connectionIntentPayloadSchema.parse(input.payload);
+      // Refuse a secret before it is persisted. The generated title and summary
+      // are built from this payload, so scanning the payload covers all three
+      // stored columns.
+      await assertNoSecretWrite(db, [payload]);
       const existing = await getIdempotentInteraction({
         issueId: issue.id,
         companyId: issue.companyId,
@@ -3370,6 +3375,11 @@ export function issueThreadInteractionService(
       const data = normalizeCreateInteractionInput(
         createIssueThreadInteractionSchema.parse(input),
       );
+      // Refuse a secret before it is persisted. `create` is the single choke
+      // point every issue-thread interaction kind passes through, so one guard
+      // here covers the whole surface (questions, confirmations, verdicts,
+      // checkbox prompts and task suggestions alike).
+      await assertNoSecretWrite(db, [data.title, data.summary, data.payload]);
       // Chat ownership is server-owned and immutable. Ordinary human questions
       // must not depend on a model copying an opaque user identity correctly.
       let defaultAddresseeUserId: string | null = null;
@@ -3823,6 +3833,9 @@ export function issueThreadInteractionService(
       mutationOptions: InteractionResolutionMutationOptions = {},
     ): Promise<ResolvedInteractionResult> => {
       const data = acceptIssueThreadInteractionSchema.parse(input);
+      // A resolution persists its input (answers, reasons, verdict notes) on the
+      // interaction row, so refuse a secret in it as `create` does.
+      await assertNoSecretWrite(db, [data]);
       const current = await getPendingInteractionForResolution({
         issue,
         interactionId,
@@ -4094,6 +4107,9 @@ export function issueThreadInteractionService(
       mutationOptions: InteractionResolutionMutationOptions = {},
     ) => {
       const data = rejectIssueThreadInteractionSchema.parse(input);
+      // A resolution persists its input (answers, reasons, verdict notes) on the
+      // interaction row, so refuse a secret in it as `create` does.
+      await assertNoSecretWrite(db, [data]);
       const current = await getPendingInteractionForResolution({
         issue,
         interactionId,
@@ -4135,6 +4151,9 @@ export function issueThreadInteractionService(
     }> => {
       assertIssueOpenForInteractionResolution(issue);
       const data = submitIssueThreadInteractionVerdictsSchema.parse(input);
+      // A resolution persists its input (answers, reasons, verdict notes) on the
+      // interaction row, so refuse a secret in it as `create` does.
+      await assertNoSecretWrite(db, [data]);
       const submission = await db.transaction(async (tx) => {
         await assertInteractionRunWriteAllowed(tx as unknown as Db, issue, actor);
         const current = await tx
@@ -4918,6 +4937,9 @@ export function issueThreadInteractionService(
       mutationOptions: InteractionResolutionMutationOptions = {},
     ) => {
       assertIssueOpenForInteractionResolution(issue);
+      // A resolution persists its input (answers, reasons, verdict notes) on the
+      // interaction row, so refuse a secret in it as `create` does.
+      await assertNoSecretWrite(db, [input]);
       const current = await db
         .select()
         .from(issueThreadInteractions)
@@ -5018,6 +5040,9 @@ export function issueThreadInteractionService(
     ) => {
       assertIssueOpenForInteractionResolution(issue);
       const data = skipIssueThreadInteractionSchema.parse(input);
+      // A resolution persists its input (answers, reasons, verdict notes) on the
+      // interaction row, so refuse a secret in it as `create` does.
+      await assertNoSecretWrite(db, [data]);
       const current = await db
         .select()
         .from(issueThreadInteractions)
