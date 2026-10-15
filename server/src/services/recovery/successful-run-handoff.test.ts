@@ -12,6 +12,7 @@ import {
   isIdempotentFinishSuccessfulRunHandoffWakeStatus,
   isSuccessfulRunHandoffValidPathSkip,
   isPluginManagedIssueLifecycle,
+  isSuccessfulRunHandoffAlreadyEscalated,
   isSuccessfulRunHandoffRequiredNoticeBody,
   noticeMetadataReferencesRecoveryAction,
 } from "./successful-run-handoff.js";
@@ -609,5 +610,80 @@ describe("successful run handoff decision", () => {
     expect(isSuccessfulRunHandoffRequiredNoticeBody("## Successful run missing issue disposition\n\nold body")).toBe(true);
     expect(isSuccessfulRunHandoffRequiredNoticeBody("## This issue still needs a next step\n\nold body")).toBe(true);
     expect(isSuccessfulRunHandoffRequiredNoticeBody("Unrelated comment")).toBe(false);
+  });
+});
+
+describe("isSuccessfulRunHandoffAlreadyEscalated", () => {
+  it("recognises the handoff that created the persisted escalation record", () => {
+    // The case that repeats the re-block: the action row already records the
+    // very corrective run the sweep is about to escalate again.
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "run-1",
+      persistedEvidence: {
+        correctiveRunId: "run-1",
+        handoffAttempt: 1,
+        maxHandoffAttempts: 1,
+      },
+    })).toBe(true);
+  });
+
+  it("treats surrounding whitespace as the same run id", () => {
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "  run-1  ",
+      persistedEvidence: { correctiveRunId: "run-1" },
+    })).toBe(true);
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "run-1",
+      persistedEvidence: { correctiveRunId: " run-1" },
+    })).toBe(true);
+  });
+
+  it("escalates when the persisted record belongs to an earlier handoff", () => {
+    // The counter-arm: a genuinely new corrective run must still escalate, so
+    // the guard cannot be widened into "never escalate".
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "run-2",
+      persistedEvidence: { correctiveRunId: "run-1" },
+    })).toBe(false);
+  });
+
+  it("escalates when there is no persisted record at all", () => {
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "run-1",
+      persistedEvidence: null,
+    })).toBe(false);
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "run-1",
+      persistedEvidence: undefined,
+    })).toBe(false);
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "run-1",
+      persistedEvidence: {},
+    })).toBe(false);
+  });
+
+  it("never suppresses an escalation on a malformed record or a missing run id", () => {
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "run-1",
+      persistedEvidence: { correctiveRunId: null },
+    })).toBe(false);
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "run-1",
+      persistedEvidence: { correctiveRunId: 42 },
+    })).toBe(false);
+    // Two empty ids must not compare equal, or a run with no id would match any
+    // record whose id is also blank.
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "",
+      persistedEvidence: { correctiveRunId: "" },
+    })).toBe(false);
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: "   ",
+      persistedEvidence: { correctiveRunId: "   " },
+    })).toBe(false);
+    expect(isSuccessfulRunHandoffAlreadyEscalated({
+      correctiveRunId: null,
+      persistedEvidence: { correctiveRunId: "" },
+    })).toBe(false);
   });
 });

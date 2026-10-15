@@ -124,6 +124,7 @@ import {
   SUCCESSFUL_RUN_MISSING_STATE_REASON,
   buildSuccessfulRunHandoffExhaustedNotice,
   isPluginManagedIssueLifecycle,
+  isSuccessfulRunHandoffAlreadyEscalated,
   noticeMetadataReferencesRecoveryAction,
   type SuccessfulRunHandoffNotice,
 } from "./successful-run-handoff.js";
@@ -5283,6 +5284,27 @@ export function recoveryService(
           }
         }
 
+        // One escalation per handoff attempt. The recovery action is the durable
+        // record that this attempt already escalated: it persists the
+        // `correctiveRunId` that produced it, so the check keys on handoff
+        // identity rather than on action lifecycle. The board-owned guard above
+        // cannot cover this, because the action can be resolved and the issue
+        // re-armed inside the same instant, after which `getActiveForIssue`
+        // returns null and a repeat escalation re-blocks an issue whose
+        // disposition write already succeeded. A genuinely new handoff carries a
+        // new corrective run id and still escalates.
+        const priorHandoffAction = await recoveryActionsSvc.getLatestForIssueAndCause(
+          issue.companyId,
+          issue.id,
+          SUCCESSFUL_RUN_MISSING_STATE_REASON,
+        );
+        if (isSuccessfulRunHandoffAlreadyEscalated({
+          correctiveRunId: handoffEvidence.correctiveRunId,
+          persistedEvidence: priorHandoffAction?.evidence ?? null,
+        })) {
+          result.skipped += 1;
+          continue;
+        }
         const updated = await escalateStrandedAssignedIssue({
           issue,
           previousStatus: "in_progress",
