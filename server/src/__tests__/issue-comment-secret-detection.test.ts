@@ -197,6 +197,24 @@ describeEmbeddedPostgres("issue comment secret detection", () => {
     expect(await commentCount(issueId)).toBe(0);
   });
 
+  it("refuses a PATCH comment before the issue update commits", async () => {
+    const { companyId, issueId } = await seedIssue();
+    const secret = "AKIAIOSFODNN7EXAMPLE";
+
+    const response = await request(createApp(companyId))
+      .patch(`/api/issues/${issueId}`)
+      .send({ title: "Renamed by a refused patch", comment: `deploy key ${secret}` });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toMatchObject({ error: "secret_detected", rule: "aws_access_key_id" });
+    const [row] = await db
+      .select({ title: issues.title })
+      .from(issues)
+      .where(eq(issues.id, issueId));
+    expect(row?.title).toBe("Secret detection");
+    expect(await commentCount(issueId)).toBe(0);
+  });
+
   it("refuses a comment carrying an Authorization bearer token", async () => {
     const { companyId, issueId } = await seedIssue();
     const token = "b".repeat(32);

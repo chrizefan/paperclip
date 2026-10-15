@@ -53,7 +53,7 @@ describe("detectSecret named rules", () => {
     },
     {
       name: "private_key_header_inline",
-      sample: `API_SECRET=${"a".repeat(24)}`,
+      sample: `API_SECRET=${"a1".repeat(12)}`,
     },
   ];
 
@@ -176,5 +176,43 @@ describe("detectSecret never echoes the value", () => {
     expect(serialized).not.toContain(secret);
     // The fingerprint is a hash, not a substring of the value.
     expect(secret).not.toContain(String(match!.fingerprint));
+  });
+});
+
+describe("detectSecret review follow-ups", () => {
+  it("scans a long dot-free run in linear time", () => {
+    const blob = `prefix ${"a".repeat(80_000)} suffix`;
+    const started = performance.now();
+    expect(detectSecret(blob)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("does not flag a data URI payload", () => {
+    const payload = randomBytes(120).toString("base64");
+    expect(detectSecret(`![chart](data:image/png;base64,${payload})`)).toBeNull();
+  });
+
+  it("does not flag SRI digests or sha384/sha512 hex checksums", () => {
+    expect(detectSecret(`integrity="sha256-${randomBytes(32).toString("base64")}"`)).toBeNull();
+    expect(detectSecret(`integrity="sha512-${randomBytes(64).toString("base64")}"`)).toBeNull();
+    expect(detectSecret(`sha384: ${randomBytes(48).toString("hex")}`)).toBeNull();
+    expect(detectSecret(`sha512: ${randomBytes(64).toString("hex")}`)).toBeNull();
+  });
+
+  it("does not flag a long path or slug", () => {
+    const path =
+      "packages/server/src/services/heartbeat-recovery/nested-module/fixtures/very_long_snake_case_file_name.test.ts";
+    expect(path.length).toBeGreaterThanOrEqual(80);
+    expect(detectSecret(`see ${path} for details`)).toBeNull();
+  });
+
+  it("does not flag a TOKEN:/SECRET= placeholder with no digit", () => {
+    expect(detectSecret("TOKEN: see_the_documentation_section_below")).toBeNull();
+    expect(detectSecret("SECRET=your_generated_secret_value_goes_here")).toBeNull();
+  });
+
+  it("still flags a generated TOKEN= value and a random base64url run", () => {
+    expectRule(`API_TOKEN=${randomBytes(24).toString("hex")}`, "private_key_header_inline");
+    expectRule(`blob ${randomBytes(72).toString("base64url")} end`, "high_entropy_base64");
   });
 });

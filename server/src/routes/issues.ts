@@ -228,6 +228,7 @@ import {
   forbidden,
   HttpError,
   notFound,
+  secretDetected,
   unauthorized,
   unprocessable,
 } from "../errors.js";
@@ -279,6 +280,7 @@ import {
 import { decisionTrainingService } from "../services/decision-training.js";
 import { feedbackService } from "../services/feedback.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { detectSecret } from "../services/secret-detection.js";
 import {
   ISSUE_BLOCKER_DIAGNOSTICS_MAX_BLOCKERS,
   ISSUE_WAKE_DIAGNOSTICS_LOOKBACK_DAYS,
@@ -12879,6 +12881,15 @@ export function issueRoutes(
       } = req.body;
       if (existing.conversationAgentId && req.actor.type === "board" && commentBody) {
         throw unprocessable("Send conversation messages through the comments endpoint with a clientRequestId");
+      }
+      // addComment refuses a secret too, but only after the issue update above it
+      // has committed. Scan first so a refused comment leaves the issue untouched.
+      if (
+        typeof commentBody === "string" &&
+        (await instanceSettings.getExperimental()).enableSecretWriteDetection
+      ) {
+        const secret = detectSecret(commentBody);
+        if (secret) throw secretDetected(secret.rule, secret.fingerprint);
       }
       if (
         deferWakeForGoal === true &&
