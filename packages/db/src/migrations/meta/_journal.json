@@ -2094,6 +2094,13 @@
       "when": 1792102604505,
       "tag": "0300_fantastic_blacklash",
       "breakpoints": true
+    },
+    {
+      "idx": 301,
+      "version": "7",
+      "when": 1792117168481,
+      "tag": "0301_overjoyed_annihilus",
+      "breakpoints": true
     }
   ]
 }

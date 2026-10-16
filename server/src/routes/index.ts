@@ -23,6 +23,7 @@ export { goalRoutes } from "./goals.js";
 export { onboardingSeedRoutes } from "./onboarding-seed.js";
 export { approvalRoutes } from "./approvals.js";
 export { secretRoutes } from "./secrets.js";
+export { permissionGrantProposalRoutes } from "./permission-grant-proposals.js";
 export { toolAccessRoutes } from "./tool-access.js";
 export { smokeLabRoutes } from "./smoke-lab.js";
 export { costRoutes } from "./costs.js";

@@ -85,7 +85,8 @@ export type AuthorizationAction =
   | "project:read"
   | "runtime:manage"
   | "secrets:read"
-  | "secrets:propose";
+  | "secrets:propose"
+  | "permission_grants:propose";
 
 export type AuthorizationResource =
   | { type: "company"; companyId: string }
@@ -153,6 +154,20 @@ type PrincipalGrantDecision = AuthorizationDecision & {
   grant?: NonNullable<AuthorizationDecision["grant"]>;
 };
 
+const AGENT_CONFIGURE_GRANT_MISSING =
+  "No grant exists for agents:configure, and only the board can create one.";
+
+function agentConfigureGrantExplanation(
+  principalType: PrincipalType,
+  permissionKey: PermissionKey,
+  fallback: string,
+) {
+  if (principalType === "agent" && permissionKey === "agents:configure") {
+    return AGENT_CONFIGURE_GRANT_MISSING;
+  }
+  return fallback;
+}
+
 function companyIdForResource(resource: AuthorizationResource) {
   return resource.companyId;
 }
@@ -172,7 +187,8 @@ function permissionForAction(action: AuthorizationAction): PermissionKey | null 
     action === "project:read" ||
     action === "runtime:manage" ||
     action === "secrets:read" ||
-    action === "secrets:propose"
+    action === "secrets:propose" ||
+    action === "permission_grants:propose"
   ) {
     return null;
   }
@@ -715,7 +731,11 @@ export function authorizationService(db: Db | DbTransaction) {
       return deny({
         action: input.action,
         reason: "deny_missing_grant",
-        explanation: `Missing permission: ${input.permissionKey}.`,
+        explanation: agentConfigureGrantExplanation(
+          input.principalType,
+          input.permissionKey,
+          `Missing permission: ${input.permissionKey}.`,
+        ),
       });
     }
 
@@ -1041,7 +1061,8 @@ export function authorizationService(db: Db | DbTransaction) {
       input.action === "inbox:manage" ||
       input.action === "runtime:manage" ||
       input.action === "secrets:read" ||
-      input.action === "secrets:propose"
+      input.action === "secrets:propose" ||
+      input.action === "permission_grants:propose"
     ) {
       return lowTrustDeny(
         `${LOW_TRUST_REVIEW_PRESET} agents cannot use company-wide or privileged ${input.action} APIs by default.`,
@@ -1219,7 +1240,8 @@ export function authorizationService(db: Db | DbTransaction) {
       input.action === "project:read" ||
       input.action === "runtime:manage" ||
       input.action === "secrets:read" ||
-      input.action === "secrets:propose"
+      input.action === "secrets:propose" ||
+      input.action === "permission_grants:propose"
     ) {
       return denyBridge("Task bridge keys cannot use company-wide, peer-agent, project, runtime, or secret APIs.");
     }
@@ -1290,6 +1312,7 @@ export function authorizationService(db: Db | DbTransaction) {
       input.action === "runtime:manage" ||
       input.action === "secrets:read" ||
       input.action === "secrets:propose" ||
+      input.action === "permission_grants:propose" ||
       input.action === "tasks:assign"
     ) {
       return denySkillTest("Skill-test run tokens cannot use company-wide, peer-agent, project, runtime, secret, or task-create APIs.");
@@ -1648,7 +1671,11 @@ export function authorizationService(db: Db | DbTransaction) {
       return deny({
         action: input.action,
         reason: "deny_no_grant",
-        explanation: `Missing permission: ${keys.direct} or ${keys.suggest}.`,
+        explanation: agentConfigureGrantExplanation(
+          principalType,
+          keys.direct,
+          `Missing permission: ${keys.direct} or ${keys.suggest}.`,
+        ),
       });
     }
 
@@ -1836,7 +1863,8 @@ export function authorizationService(db: Db | DbTransaction) {
           input.action === "project:read" ||
           input.action === "runtime:manage" ||
           input.action === "secrets:read" ||
-          input.action === "secrets:propose"
+          input.action === "secrets:propose" ||
+          input.action === "permission_grants:propose"
         ) {
           const membership = await getActiveMembership(companyId, "user", input.actor.userId);
           // Mirroring the tasks:assign carve-out above, viewers keep the
@@ -1977,7 +2005,8 @@ export function authorizationService(db: Db | DbTransaction) {
         input.action === "project:read" ||
         input.action === "runtime:manage" ||
         input.action === "secrets:read" ||
-        input.action === "secrets:propose"
+        input.action === "secrets:propose" ||
+        input.action === "permission_grants:propose"
       ) {
         return lowTrustDecision;
       }
@@ -2153,7 +2182,8 @@ export function authorizationService(db: Db | DbTransaction) {
       input.action === "project:read" ||
       input.action === "runtime:manage" ||
       input.action === "secrets:read" ||
-      input.action === "secrets:propose"
+      input.action === "secrets:propose" ||
+      input.action === "permission_grants:propose"
     ) {
       return allow({
         action: input.action,

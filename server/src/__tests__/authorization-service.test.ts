@@ -267,7 +267,7 @@ describeEmbeddedPostgres("authorization service", () => {
     expect(decision).toMatchObject({
       allowed: false,
       reason: "deny_missing_grant",
-      explanation: "Missing permission: agents:configure.",
+      explanation: "No grant exists for agents:configure, and only the board can create one.",
     });
   });
 
@@ -329,6 +329,7 @@ describeEmbeddedPostgres("authorization service", () => {
     })).resolves.toMatchObject({
       allowed: false,
       reason: "deny_no_grant",
+      explanation: "No grant exists for agents:configure, and only the board can create one.",
     });
   });
 

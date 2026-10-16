@@ -4946,6 +4946,82 @@ registry.registerPath({
   },
 });
 
+const createPermissionGrantProposalSchema = z.object({
+  kind: z.literal("permission_grant"),
+  targetAgentId: z.string().uuid(),
+  permissionKey: z.enum(["agents:configure", "agents:suggest-changes"]),
+  scope: z.record(z.string(), z.unknown()).nullable().optional(),
+  justification: z.string().min(1),
+});
+
+const rejectPermissionGrantProposalSchema = z.object({ reason: z.string().min(1) });
+
+registry.registerPath({
+  method: "post",
+  path: "/api/agents/me/permission-grant-proposals",
+  tags: ["access"],
+  summary: "Propose a permission grant for board approval",
+  request: { body: jsonBody(createPermissionGrantProposalSchema) },
+  responses: {
+    201: r.ok(),
+    401: r.unauthorized,
+    403: r.forbidden,
+    422: r.unprocessable,
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/api/agents/me/permission-grant-proposals/{id}",
+  tags: ["access"],
+  summary: "Withdraw a pending permission grant proposal",
+  request: { params: z.object({ id: z.string().uuid() }) },
+  responses: {
+    200: r.ok(),
+    401: r.unauthorized,
+    403: r.forbidden,
+    404: r.notFound,
+    409: r.conflict,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/companies/{companyId}/permission-grant-proposals/{id}/approve",
+  tags: ["access"],
+  summary: "Approve a permission grant proposal by merging the key into the target grants",
+  request: {
+    params: z.object({ companyId: z.string().uuid(), id: z.string().uuid() }),
+  },
+  responses: {
+    200: r.ok(),
+    401: r.unauthorized,
+    403: r.forbidden,
+    404: r.notFound,
+    409: r.conflict,
+    422: r.unprocessable,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/companies/{companyId}/permission-grant-proposals/{id}/reject",
+  tags: ["access"],
+  summary: "Reject a pending permission grant proposal",
+  request: {
+    params: z.object({ companyId: z.string().uuid(), id: z.string().uuid() }),
+    body: jsonBody(rejectPermissionGrantProposalSchema),
+  },
+  responses: {
+    200: r.ok(),
+    401: r.unauthorized,
+    403: r.forbidden,
+    404: r.notFound,
+    409: r.conflict,
+    422: r.unprocessable,
+  },
+});
+
 registry.registerPath({
   method: "post",
   path: "/api/companies/{companyId}/secret-proposals/{id}/reject",
