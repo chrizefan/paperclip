@@ -289,6 +289,46 @@ describe("issue validators", () => {
     expect(updateIssueSchema.safeParse({ assigneeAgentId: agentId }).success).toBe(true);
   });
 
+  it("refuses unknown fields on issue comment POST instead of stripping them", () => {
+    // A caller-set `authorAgentId` validated. It returned 201. It changed
+    // nothing. So a write attributing itself to another seat read as filed
+    // while reaching no one. Same for a wholly bogus body.
+    const agentId = "11111111-2222-3333-4444-555555555555";
+    for (const wrongBody of [
+      { body: "Inspect", authorAgentId: agentId },
+      { body: "Inspect", totallyBogusField: "x", nonsense: 1 },
+    ]) {
+      const result = addIssueCommentSchema.safeParse(wrongBody);
+      if (result.success) throw new Error("comment schema accepted an unknown field");
+      const strictIssue = result.error.issues.find(
+        (entry) => entry.code === "unrecognized_keys",
+      );
+      expect(strictIssue).toBeDefined();
+    }
+    const keys = JSON.stringify(
+      (addIssueCommentSchema.safeParse({ body: "Inspect", authorAgentId: agentId }) as any)
+        .error.issues,
+    );
+    expect(keys).toContain("authorAgentId");
+
+    // A bogus-only PATCH body is refused the same way, naming the field.
+    const updateBogus = updateIssueSchema.safeParse({
+      totallyBogusField: "x",
+      nonsense: 1,
+    } as any);
+    expect(updateBogus.success).toBe(false);
+    if (!updateBogus.success) {
+      expect(
+        updateBogus.error.issues.some((entry) => entry.code === "unrecognized_keys"),
+      ).toBe(true);
+      expect(JSON.stringify(updateBogus.error.issues)).toContain("totallyBogusField");
+    }
+
+    // The real comment shape still parses. So this test pins the unknown
+    // keys, not the body.
+    expect(addIssueCommentSchema.safeParse({ body: "Inspect" }).success).toBe(true);
+  });
+
   it("allows false-positive recovery resolutions to atomically restore the source issue status", () => {
     expect(
       resolveIssueRecoveryActionSchema.parse({
