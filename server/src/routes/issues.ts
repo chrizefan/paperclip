@@ -336,6 +336,7 @@ import {
 import {
   evaluateIssueThreadInteractionResolverAudience,
   issueThreadInteractionAttentionAgentAllowed,
+  resolveAddresseeInvokabilitySnapshot,
   type IssueThreadInteractionResolverAudienceDecision,
   type IssueThreadInteractionResolverRestriction,
 } from "../services/issue-thread-interaction-resolution.js";
@@ -5676,6 +5677,8 @@ export function issueRoutes(
             : { type: "user", userId: actor.actorId },
         interaction,
         additionalRestriction: resolverPolicyRestriction,
+        addresseeInvokability:
+          (await resolveAddresseeInvokabilitySnapshot(db, interaction.addresseeAgentId)) ?? undefined,
         governedAction:
           interaction.kind === "request_confirmation" &&
           (payload?.toolAction !== undefined ||

@@ -127,6 +127,7 @@ import {
   assertIssueThreadInteractionResolverAudience,
   canonicalizeStoredResolverPolicy,
   issueThreadInteractionResolutionError,
+  resolveAddresseeInvokabilitySnapshot,
   type IssueThreadInteractionResolverRestriction,
 } from "./issue-thread-interaction-resolution.js";
 import {
@@ -460,7 +461,8 @@ function resolverActor(actor: InteractionActor) {
   return { type: "agent" as const, agentId: null, runId: null };
 }
 
-function assertInteractionResolutionAllowed(
+async function assertInteractionResolutionAllowed(
+  db: Db,
   current: IssueThreadInteractionRow,
   actor: InteractionActor,
 ) {
@@ -468,6 +470,13 @@ function assertInteractionResolutionAllowed(
     actor: resolverActor(actor),
     interaction: current,
     additionalRestriction: actor.resolverPolicyRestriction,
+    // The snapshot only changes the decision for an agent resolver that is
+    // not the addressee; skip the agents lookup for humans, system actors,
+    // and the addressee itself.
+    addresseeInvokability:
+      actor.agentId && !actor.systemId && current.addresseeAgentId && current.addresseeAgentId !== actor.agentId
+        ? (await resolveAddresseeInvokabilitySnapshot(db, current.addresseeAgentId)) ?? undefined
+        : undefined,
     governedAction:
       current.kind === "request_confirmation" &&
       current.payload !== null &&
@@ -509,7 +518,7 @@ async function assertRequestConfirmationResolutionAllowedUnderLock(
     isRequestConfirmationLikeKind(interaction.kind) &&
     (await isIssueReviewVerdictInteraction(tx, { issue, interaction }));
 
-  assertInteractionResolutionAllowed(interaction, actor);
+  await assertInteractionResolutionAllowed(tx, interaction, actor);
   if (actor.agentId && isNativeCompletionReview(interaction)) {
     const target = (interaction.payload as { target?: { revisionId?: string } }).target;
     if (!actor.runId || !await getNativeReviewAssignment(tx, {
@@ -2759,7 +2768,7 @@ export function issueThreadInteractionService(
           "Only connection_intent interactions have a connection phase",
         );
       }
-      assertInteractionResolutionAllowed(current, actor);
+      await assertInteractionResolutionAllowed(db, current, actor);
       const payload = connectionIntentPayloadSchema.parse(current.payload);
       const [updated] = await db
         .update(issueThreadInteractions)
@@ -2797,7 +2806,7 @@ export function issueThreadInteractionService(
       }
       if (!actor.userId)
         throw forbidden("Connection intents require a human resolver");
-      assertInteractionResolutionAllowed(current, actor);
+      await assertInteractionResolutionAllowed(db, current, actor);
       const status =
         result.outcome === "connected"
           ? "accepted"
@@ -3838,7 +3847,7 @@ export function issueThreadInteractionService(
         issue,
         interactionId,
       });
-      assertInteractionResolutionAllowed(current, actor);
+      await assertInteractionResolutionAllowed(db, current, actor);
       switch (current.kind) {
         case "suggest_tasks":
           // Accepting suggest_tasks only creates follow-up issues; it does not
@@ -3921,7 +3930,7 @@ export function issueThreadInteractionService(
       ) {
         throw interactionNotFoundError();
       }
-      assertInteractionResolutionAllowed(current, actor);
+      await assertInteractionResolutionAllowed(db, current, actor);
       if (current.kind !== "suggest_tasks") {
         throw unprocessable("Only suggest_tasks interactions can be accepted");
       }
@@ -4112,7 +4121,7 @@ export function issueThreadInteractionService(
         issue,
         interactionId,
       });
-      assertInteractionResolutionAllowed(current, actor);
+      await assertInteractionResolutionAllowed(db, current, actor);
       switch (current.kind) {
         case "suggest_tasks":
           return issueThreadInteractionService(db).rejectSuggestedTasks(
@@ -4174,7 +4183,7 @@ export function issueThreadInteractionService(
           );
         }
 
-        assertInteractionResolutionAllowed(current, actor);
+        await assertInteractionResolutionAllowed(db, current, actor);
         const interaction = hydrateInteraction(
           current,
         ) as RequestItemVerdictsInteraction;
@@ -4951,7 +4960,7 @@ export function issueThreadInteractionService(
       ) {
         throw interactionNotFoundError();
       }
-      assertInteractionResolutionAllowed(current, actor);
+      await assertInteractionResolutionAllowed(db, current, actor);
       if (current.kind !== "ask_user_questions") {
         throw unprocessable(
           "Only ask_user_questions interactions can be answered",

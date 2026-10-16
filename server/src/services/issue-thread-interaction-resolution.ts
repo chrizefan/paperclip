@@ -3,6 +3,10 @@ import type {
   IssueThreadInteractionResolverPolicy,
 } from "@paperclipai/shared";
 import { normalizeIssueThreadInteractionResolverPolicy } from "@paperclipai/shared";
+import type { Db } from "@paperclipai/db";
+import { agents } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
+import { evaluateAgentInvokabilityFromDb } from "./agent-invokability.js";
 import { HttpError } from "../errors.js";
 
 export const ISSUE_THREAD_INTERACTION_RESOLUTION_DENIAL_CODES = [
@@ -12,6 +16,7 @@ export const ISSUE_THREAD_INTERACTION_RESOLUTION_DENIAL_CODES = [
   "interaction_human_only",
   "interaction_creator_excluded",
   "interaction_addressee_mismatch",
+  "interaction_addressee_unavailable",
   "interaction_stale_target",
   "interaction_superseded",
   "interaction_already_resolved",
@@ -58,6 +63,8 @@ export type IssueThreadInteractionResolverAudienceInput = {
     | IssueThreadInteractionCanonicalResolverPolicy
     | IssueThreadInteractionResolverRestriction
     | null;
+  /** Answer-time snapshot of the addressed agent's invokability; absent keeps the legacy path. */
+  addresseeInvokability?: { invokable: boolean; reason?: string } | null;
   governedAction?: boolean;
 };
 
@@ -77,6 +84,7 @@ export type IssueThreadInteractionResolverAudienceDecision =
         | "interaction_human_only"
         | "interaction_creator_excluded"
         | "interaction_addressee_mismatch"
+        | "interaction_addressee_unavailable"
         | "interaction_governed_action_denied"
         | "review_policy_denied"
       >;
@@ -145,6 +153,35 @@ function reviewPolicyDeniedDecision(
         : "Change reviewPolicy to `anyone`, or move the issue out of and back into `in_review` to record a requester before another writer submits the verdict.",
     },
   };
+}
+
+/**
+ * Answer-time snapshot of the addressed agent's invokability, resolved live
+ * from the database. Returns `null` when the interaction addresses no agent,
+ * so callers keep the legacy path. A snapshot is always returned when an
+ * addressee is set — including `invokable: false` for a deleted addressee —
+ * so a card whose addressee paused after creation surfaces
+ * `interaction_addressee_unavailable` instead of a dead-end mismatch.
+ */
+export async function resolveAddresseeInvokabilitySnapshot(
+  db: Db,
+  addresseeAgentId: string | null | undefined,
+): Promise<{ invokable: boolean; reason?: string } | null> {
+  if (!addresseeAgentId) return null;
+  const [addressee] = await db
+    .select({
+      id: agents.id,
+      companyId: agents.companyId,
+      name: agents.name,
+      reportsTo: agents.reportsTo,
+      status: agents.status,
+    })
+    .from(agents)
+    .where(eq(agents.id, addresseeAgentId));
+  const invokability = await evaluateAgentInvokabilityFromDb(db, addressee ?? null);
+  return invokability.invokable
+    ? { invokable: true as const }
+    : { invokable: false as const, reason: invokability.reason };
 }
 
 /**
@@ -269,12 +306,23 @@ export function evaluateIssueThreadInteractionResolverAudience(
     input.interaction.addresseeAgentId
     && input.interaction.addresseeAgentId !== input.actor.agentId
   ) {
+    const addresseeUnusable = input.addresseeInvokability?.invokable === false;
     return {
       allowed: false,
       effectiveResolverPolicy,
       status: 403,
-      code: "interaction_addressee_mismatch",
-      message: "Only the addressed agent or an authorized human may resolve this issue-thread interaction",
+      code: addresseeUnusable ? "interaction_addressee_unavailable" : "interaction_addressee_mismatch",
+      message: addresseeUnusable
+        ? "The addressed agent is no longer invokable; a human user may still resolve this interaction, or the creator may withdraw and re-target it"
+        : "Only the addressed agent or an authorized human may resolve this issue-thread interaction",
+      ...(addresseeUnusable
+        ? { details: {
+          addresseeAgentId: input.interaction.addresseeAgentId,
+          reason: input.addresseeInvokability?.reason ?? "unknown",
+          eligibleResolvers: ["human_user_override", "creator_withdraw_and_retarget"],
+          remediation: "Have a human user resolve it, or have the creator withdraw and re-target an invokable agent.",
+        } }
+        : {}),
     };
   }
 
