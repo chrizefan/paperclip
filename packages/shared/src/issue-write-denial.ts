@@ -250,18 +250,18 @@ export function describeIssueWriteDenial(
         status: 403,
         tone: "boundary",
         boundary: "Heartbeat run context",
-        title: "Cross-issue writes need a run to attribute them to",
+        title: "This write did not carry a run that belongs to you",
         description:
           `Every agent comment and task update is attributed to a heartbeat run so the ` +
-          `cross-issue cap can be counted and the audit trail can name who acted for whom. ` +
-          `This request arrived without a run bound to an issue, so it could not ` +
-          `be contained.`,
-        whoCanAct: `${actor}, once the request carries a run that is bound to an issue.`,
+          `per-run cap can be counted and the audit trail can name who acted for whom. ` +
+          `This request carried no run id, a malformed one, or a run that is not this ` +
+          `agent's run in this company. (Runs with no task binding are not refused here: ` +
+          `they spend the same per-run budget as any other run.)`,
+        whoCanAct: `${actor}, once the request carries the current run id.`,
         sanctionedPath:
           `Send the \`X-Paperclip-Run-Id\` header with your current run (\`$PAPERCLIP_RUN_ID\`) ` +
-          `and retry. If the run has no assigned task, no header can contain it — write to ` +
-          `the run log instead, and record board findings once you hold an assigned task.`,
-
+          `and retry once. If it is refused again with the same header, do not keep resending; instead ` +
+          `${CHILD_ISSUE_PATH}.`,
       };
 
     case "issue_write_attribution_spoof_rejected":
