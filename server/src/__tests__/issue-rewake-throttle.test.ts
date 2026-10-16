@@ -283,6 +283,20 @@ describe("DIG-3744: comment-only no-op runs do not reset the streak", () => {
     expect(decision).toEqual({ blocked: false, noProgressStreak: 0 });
   });
 
+  it("treats a comment-only run with null liveness (pre-liveness DB row) as progress", () => {
+    const decision = evaluateIssueRewakeThrottle({
+      now: NOW,
+      recentTerminalRuns: [
+        { ...noopRun("r2", 10), livenessState: null },
+        { ...noopRun("r1", 40), livenessState: null },
+      ],
+      runIdsWithIssueProgress: new Set(["r2", "r1"]),
+      runIdsWithStrongProgress: new Set<string>(),
+      hasNewIssueInputSinceLastRun: false,
+    });
+    expect(decision).toEqual({ blocked: false, noProgressStreak: 0 });
+  });
+
   it("preserves legacy behaviour when liveness and strong progress are absent", () => {
     const decision = evaluateIssueRewakeThrottle({
       now: NOW,

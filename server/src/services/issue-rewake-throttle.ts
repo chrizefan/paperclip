@@ -198,9 +198,10 @@ export function evaluateIssueRewakeThrottle(input: IssueRewakeThrottleInput): Is
     if (input.runIdsWithStrongProgress === undefined) break;
     if (input.runIdsWithStrongProgress.has(run.id)) break;
     const liveness = run.livenessState;
-    // No liveness recorded (old rows): preserve legacy, treat as progress.
-    if (liveness === undefined) break;
-    if (liveness !== null && ISSUE_REWAKE_PRODUCTIVE_LIVENESS_STATES.has(liveness)) break;
+    // No liveness recorded: the DB column is nullable, so old rows read back as
+    // `null` (not `undefined`). Preserve legacy for both: treat as progress.
+    if (liveness === undefined || liveness === null) break;
+    if (ISSUE_REWAKE_PRODUCTIVE_LIVENESS_STATES.has(liveness)) break;
     noProgressStreak += 1;
   }
 
