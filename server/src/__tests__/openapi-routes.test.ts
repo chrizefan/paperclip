@@ -66,6 +66,7 @@ const apiPrefixes: Record<string, string> = {
   "remote-agent-profiles.ts": "/api",
   "routines.ts": "/api",
   "secrets.ts": "/api",
+  "permission-grant-proposals.ts": "/api",
   "sidebar-badges.ts": "/api",
   "sidebar-preferences.ts": "/api",
   "summary-slots.ts": "/api",
