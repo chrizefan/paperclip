@@ -207,3 +207,106 @@ describe("evaluateIssueRewakeThrottle", () => {
     expect(decision).toEqual({ blocked: false, noProgressStreak: 0 });
   });
 });
+
+describe("DIG-3744: comment-only no-op runs do not reset the streak", () => {
+  function noopRun(id: string, finishedSecondsAgo: number, livenessState = "needs_followup") {
+    return { id, status: "succeeded", finishedAt: new Date(NOW.getTime() - finishedSecondsAgo * 1000), livenessState };
+  }
+
+  function commentOnlyProgress(ids: string[]) {
+    return {
+      runIdsWithIssueProgress: new Set(ids),
+      // No non-comment activity on any run.
+      runIdsWithStrongProgress: new Set<string>(),
+    };
+  }
+
+  it("blocks the 1-per-minute state-check loop (8 identical no-op runs)", () => {
+    // DIG-1575: 12 consecutive `needs_followup` "State check only" runs,
+    // each posting a status comment ~60s apart. Pre-fix every comment
+    // counted as progress, so the streak never reached the threshold.
+    const ids = Array.from({ length: 8 }, (_, i) => `r${8 - i}`);
+    const runs = ids.map((id, i) => noopRun(id, 10 + i * 60));
+    const decision = evaluateIssueRewakeThrottle({
+      now: NOW,
+      recentTerminalRuns: runs,
+      ...commentOnlyProgress(ids),
+      hasNewIssueInputSinceLastRun: false,
+    });
+    expect(decision.blocked).toBe(true);
+    if (decision.blocked) {
+      expect(decision.noProgressStreak).toBe(8);
+      expect(decision.cooldownMs).toBe(ISSUE_REWAKE_MAX_COOLDOWN_MS);
+    }
+  });
+
+  it("blocks comment-only empty_response runs at the threshold", () => {
+    const decision = evaluateIssueRewakeThrottle({
+      now: NOW,
+      recentTerminalRuns: [
+        noopRun("r2", 10, "empty_response"),
+        noopRun("r1", 40, "empty_response"),
+      ],
+      ...commentOnlyProgress(["r2", "r1"]),
+      hasNewIssueInputSinceLastRun: false,
+    });
+    expect(decision.blocked).toBe(true);
+    if (decision.blocked) {
+      expect(decision.noProgressStreak).toBe(2);
+      expect(decision.cooldownMs).toBe(ISSUE_REWAKE_BASE_COOLDOWN_MS);
+    }
+  });
+
+  it("still allows a comment-only run whose liveness is productive", () => {
+    const decision = evaluateIssueRewakeThrottle({
+      now: NOW,
+      recentTerminalRuns: [
+        { ...noopRun("r2", 10), livenessState: "advanced" },
+        { ...noopRun("r1", 40), livenessState: "advanced" },
+      ],
+      ...commentOnlyProgress(["r2", "r1"]),
+      hasNewIssueInputSinceLastRun: false,
+    });
+    // Newest run's productive comment breaks the streak immediately.
+    expect(decision).toEqual({ blocked: false, noProgressStreak: 0 });
+  });
+
+  it("still allows when a no-op-liveness run left substantive progress", () => {
+    const decision = evaluateIssueRewakeThrottle({
+      now: NOW,
+      recentTerminalRuns: [noopRun("r2", 10), noopRun("r1", 40)],
+      runIdsWithIssueProgress: new Set(["r2", "r1"]),
+      // r2 also wrote a document: strong progress breaks the streak.
+      runIdsWithStrongProgress: new Set(["r2"]),
+      hasNewIssueInputSinceLastRun: false,
+    });
+    expect(decision).toEqual({ blocked: false, noProgressStreak: 0 });
+  });
+
+  it("treats a comment-only run with null liveness (pre-liveness DB row) as progress", () => {
+    const decision = evaluateIssueRewakeThrottle({
+      now: NOW,
+      recentTerminalRuns: [
+        { ...noopRun("r2", 10), livenessState: null },
+        { ...noopRun("r1", 40), livenessState: null },
+      ],
+      runIdsWithIssueProgress: new Set(["r2", "r1"]),
+      runIdsWithStrongProgress: new Set<string>(),
+      hasNewIssueInputSinceLastRun: false,
+    });
+    expect(decision).toEqual({ blocked: false, noProgressStreak: 0 });
+  });
+
+  it("preserves legacy behaviour when liveness and strong progress are absent", () => {
+    const decision = evaluateIssueRewakeThrottle({
+      now: NOW,
+      recentTerminalRuns: [
+        runSample({ id: "r2", finishedSecondsAgo: 10 }),
+        runSample({ id: "r1", finishedSecondsAgo: 40 }),
+      ],
+      runIdsWithIssueProgress: new Set(["r2", "r1"]),
+      hasNewIssueInputSinceLastRun: false,
+    });
+    expect(decision).toEqual({ blocked: false, noProgressStreak: 0 });
+  });
+});
