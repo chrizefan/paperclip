@@ -469,8 +469,13 @@ async function assertInteractionResolutionAllowed(
     actor: resolverActor(actor),
     interaction: current,
     additionalRestriction: actor.resolverPolicyRestriction,
+    // The snapshot only changes the decision for an agent resolver that is
+    // not the addressee; skip the agents lookup for humans, system actors,
+    // and the addressee itself.
     addresseeInvokability:
-      (await resolveAddresseeInvokabilitySnapshot(db, current.addresseeAgentId)) ?? undefined,
+      actor.agentId && !actor.systemId && current.addresseeAgentId && current.addresseeAgentId !== actor.agentId
+        ? (await resolveAddresseeInvokabilitySnapshot(db, current.addresseeAgentId)) ?? undefined
+        : undefined,
     governedAction:
       current.kind === "request_confirmation" &&
       current.payload !== null &&
