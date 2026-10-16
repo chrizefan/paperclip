@@ -9558,6 +9558,30 @@ export function resolveHeartbeatSchedulingSuppression(
   return { suppressed: false, reason: null };
 }
 
+// DIG-3981: Postgres text/jsonb fields reject NUL (U+0000). Strip NUL only
+// (leave other controls intact) from heartbeat finalization text fields and
+// recursively from usageJson/resultJson before the db.update.
+export function stripNulDeep(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(/\u0000/g, "");
+  if (Array.isArray(value)) return value.map(stripNulDeep);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = stripNulDeep(v);
+    return out;
+  }
+  return value;
+}
+
+export function stripNulFromHeartbeatPatch<T extends Record<string, unknown>>(patch: T): T {
+  const p = patch as Record<string, unknown>;
+  if (typeof p.error === "string") p.error = stripNulDeep(p.error);
+  if (typeof p.stdoutExcerpt === "string") p.stdoutExcerpt = stripNulDeep(p.stdoutExcerpt);
+  if (typeof p.stderrExcerpt === "string") p.stderrExcerpt = stripNulDeep(p.stderrExcerpt);
+  if (p.usageJson !== undefined) p.usageJson = stripNulDeep(p.usageJson);
+  if (p.resultJson !== undefined) p.resultJson = stripNulDeep(p.resultJson);
+  return p as T;
+}
+
 export function heartbeatService(
   db: Db,
   options: HeartbeatServiceOptions = {},
@@ -13038,6 +13062,8 @@ export function heartbeatService(
         },
       };
     }
+    // DIG-3981: strip NUL (U+0000) before the db.update; Postgres rejects NUL in text/jsonb.
+    if (patch) patch = stripNulFromHeartbeatPatch({ ...patch });
     const updated =
       previousStatus &&
       await legacyExecutionNeedsReconciliationWithEvidence(db, {
