@@ -1143,6 +1143,50 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     })).toMatchObject({ allowed: true, reason: "allow_human_override" });
   });
 
+  it("refuses a non-addressee accept once the addressee has paused", async () => {
+    const { companyId, goalId, issueId } = await seedConfirmationIssue("Paused-after-creation accept");
+    const creatorAgentId = randomUUID();
+    const addresseeAgentId = randomUUID();
+    const otherAgentId = randomUUID();
+    const otherRunId = randomUUID();
+    await db.insert(agents).values([
+      { id: creatorAgentId, companyId, name: "Creator", role: "engineer", status: "active" },
+      { id: addresseeAgentId, companyId, name: "Reviewer", role: "engineer", status: "active" },
+      { id: otherAgentId, companyId, name: "Other", role: "engineer", status: "active" },
+    ]);
+    await db.insert(heartbeatRuns).values({
+      id: otherRunId,
+      companyId,
+      agentId: otherAgentId,
+      invocationSource: "manual",
+      status: "running",
+      createdAt: new Date("2026-07-25T12:00:00.000Z"),
+      startedAt: new Date("2026-07-25T12:00:01.000Z"),
+      contextSnapshot: { issueId },
+    });
+    const created = await interactionsSvc.create(
+      { id: issueId, companyId },
+      { kind: "request_confirmation", addresseeAgentId, payload: { version: 1, prompt: "Approve?" } },
+      { agentId: creatorAgentId },
+    );
+    expect(created.status).toBe("pending");
+    await db.update(agents).set({ status: "paused" }).where(eq(agents.id, addresseeAgentId));
+    await expect(interactionsSvc.acceptInteraction(
+      { id: issueId, companyId, goalId, projectId: null },
+      created.id,
+      {},
+      { agentId: otherAgentId, runId: otherRunId },
+    )).rejects.toMatchObject({
+      status: 403,
+      message: expect.stringContaining("no longer invokable"),
+      details: expect.objectContaining({
+        addresseeAgentId,
+        reason: "paused",
+        eligibleResolvers: ["human_user_override", "creator_withdraw_and_retarget"],
+      }),
+    });
+  });
+
   it("rejects interaction addressees with an invalid reporting chain", async () => {
     const { companyId, issueId } = await seedConfirmationIssue("Reject uninvokable addressee chain");
     const creatorAgentId = randomUUID();

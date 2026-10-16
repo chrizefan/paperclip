@@ -4,7 +4,7 @@ import { resolveConfirmationFromCommentSchema, type ResolveConfirmationFromComme
 import { assertAgentRunWriteAllowed } from "../agent-run-cancellation.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { persistActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
-import { assertIssueThreadInteractionResolverAudience } from "./issue-thread-interaction-resolution.js";
+import { assertIssueThreadInteractionResolverAudience, resolveAddresseeInvokabilitySnapshot } from "./issue-thread-interaction-resolution.js";
 import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 
 type ResolutionActor = Parameters<ReturnType<typeof issueThreadInteractionService>["acceptInteraction"]>[3];
@@ -93,6 +93,8 @@ export async function resolveConfirmationFromComment(db: Db, args: {
     assertIssueThreadInteractionResolverAudience({
       actor: { type: "agent", agentId: args.actor.agentId, runId: args.actor.runId },
       interaction: card, additionalRestriction: args.actor.resolverPolicyRestriction,
+      addresseeInvokability:
+        (await resolveAddresseeInvokabilitySnapshot(tx, card.addresseeAgentId)) ?? undefined,
     });
     const expected = input.decision === "accept" ? "accepted" : "rejected";
     const selected = input.selectedOptionIds;
