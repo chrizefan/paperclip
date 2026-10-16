@@ -80,18 +80,17 @@ describe("describeIssueWriteDenial", () => {
     expect(copy.description).not.toContain("attempt");
   });
 
-  it("tells the run-context denial that no header value can bind the run", () => {
+  it("tells the run-context denial how to repair the run header", () => {
     const copy = describeIssueWriteDenial("cross_issue_influence_run_context_required");
-    // One code serves three arms (malformed run id, another actor's run row,
-    // an unbound run row), and the live arm is the unbound one. Naming the
-    // header as the remedy is circular for that arm: the header only selects
-    // which run row is read, and that row has no issue. DIG-502, DIG-2199.
-    expect(copy.sanctionedPath).not.toContain("X-Paperclip-Run-Id");
-    expect(copy.sanctionedPath).not.toContain("PAPERCLIP_RUN_ID");
-    expect(copy.title).not.toContain("Cross-issue");
-    expect(copy.description).toContain("neither an issue binding nor a task binding");
-    expect(copy.sanctionedPath).toContain("Do not resend");
+    // After unbound runs spend the per-run budget instead of being refused, the
+    // remaining arms (missing/malformed run id, or another actor's run row) are
+    // all repairable by sending the current run id.
+    expect(copy.sanctionedPath).toContain("X-Paperclip-Run-Id");
+    expect(copy.sanctionedPath).toContain("PAPERCLIP_RUN_ID");
+    expect(copy.sanctionedPath).toContain("do not keep resending");
     expect(copy.sanctionedPath).toContain("child issue");
+    expect(copy.title).not.toContain("task binding");
+    expect(copy.description).not.toContain("neither an issue binding nor a task binding");
   });
 
   it("tells a spoof attempt that the write itself was fine", () => {
