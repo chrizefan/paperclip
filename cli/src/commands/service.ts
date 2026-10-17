@@ -39,7 +39,23 @@ async function probeHealth(instanceId: string): Promise<HealthResult> {
   }
 }
 
-async function waitForHealth(instanceId: string, expectedVersion: string | null, timeoutMs = 60_000): Promise<HealthResult> {
+export const DEFAULT_SERVICE_HEALTH_TIMEOUT_MS = 60_000;
+const MAX_SERVICE_HEALTH_TIMEOUT_MS = 60 * 60_000;
+
+/**
+ * Resolve how long a restart (and so `paperclipai update`) waits for /api/health.
+ * Large databases can take minutes to start. Set PAPERCLIP_SERVICE_HEALTH_TIMEOUT_MS
+ * to raise the wait. Invalid values fall back to the 60s default. The value is capped at 1h.
+ */
+export function resolveServiceHealthTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.PAPERCLIP_SERVICE_HEALTH_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_SERVICE_HEALTH_TIMEOUT_MS;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_SERVICE_HEALTH_TIMEOUT_MS;
+  return Math.min(Math.floor(value), MAX_SERVICE_HEALTH_TIMEOUT_MS);
+}
+
+async function waitForHealth(instanceId: string, expectedVersion: string | null, timeoutMs = resolveServiceHealthTimeoutMs()): Promise<HealthResult> {
   const deadline = Date.now() + timeoutMs;
   let last: HealthResult = { ok: false, serverVersion: null };
   while (Date.now() < deadline) {
