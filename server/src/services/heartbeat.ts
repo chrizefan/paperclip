@@ -170,6 +170,8 @@ import {
   issueApprovals,
   issueAttachments,
   issueComments,
+  issueLabels,
+  labels as issueLabelDefinitions,
   issuePlanDecompositions,
   issueRecoveryActions,
   issueRelations,
@@ -395,6 +397,7 @@ import {
   isThrottleCandidateIssueRewake,
 } from "./issue-rewake-throttle.js";
 import { ISSUE_WAKE_CAP_WINDOW_MS, resolveIssueWakeCapPerDay, shouldSkipWakeForIssueCap } from "./issue-wake-cap.js";
+import { resolveNoWakeLabelName, shouldSkipWakeForNoWakeLabel } from "./issue-no-wake-label.js";
 import {
   logActivity,
   publishPluginDomainEvent,
@@ -27817,6 +27820,38 @@ export function heartbeatService(
               finishedAt: new Date(),
             });
             return { kind: "skipped" as const };
+          }
+
+          // Dispatch skip label (opt-in via PAPERCLIP_NO_WAKE_LABEL): a parked
+          // issue gets no automatic wakes. Human user wakes still pass.
+          const noWakeLabel = resolveNoWakeLabelName();
+          if (noWakeLabel && opts.requestedByActorType !== "user") {
+            const labelRows = await tx
+              .select({ name: issueLabelDefinitions.name })
+              .from(issueLabels)
+              .innerJoin(issueLabelDefinitions, eq(issueLabelDefinitions.id, issueLabels.labelId))
+              .where(and(eq(issueLabels.issueId, issue.id), eq(issueLabels.companyId, issue.companyId)));
+            if (shouldSkipWakeForNoWakeLabel({
+              noWakeLabel,
+              issueLabelNames: labelRows.map((row) => row.name),
+              requestedByActorType: opts.requestedByActorType ?? null,
+            })) {
+              await tx.insert(agentWakeupRequests).values({
+                ...durableReceiptFields,
+                companyId: agent.companyId,
+                agentId,
+                source,
+                triggerDetail,
+                reason: "issue_no_wake_label",
+                payload: { ...(payload ?? {}), issueId, heartbeatSkip: { reason: "issue_no_wake_label", label: noWakeLabel, requestedReason: reason } },
+                status: "skipped",
+                requestedByActorType: opts.requestedByActorType ?? null,
+                requestedByActorId: opts.requestedByActorId ?? null,
+                idempotencyKey: opts.idempotencyKey ?? null,
+                finishedAt: new Date(),
+              });
+              return { kind: "skipped" as const };
+            }
           }
 
           if (opts.failedRunId) {
