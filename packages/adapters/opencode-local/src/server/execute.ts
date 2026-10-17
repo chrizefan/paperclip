@@ -1,4 +1,5 @@
 import { createProviderStoppedBoundary } from "@paperclipai/adapter-utils/provider-stopped-boundary";
+import { classifyOpenCodeLimitError, isOpenCodeQuotaClassificationEnabled } from "./quota.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -710,6 +711,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         stderrLine ||
         `OpenCode exited with code ${synthesizedExitCode ?? -1}`;
       const modelId = model || null;
+      const failed = (synthesizedExitCode ?? 0) !== 0;
+      // Opt-in: classify provider limit text so the server retries after the reset.
+      const limit = failed && isOpenCodeQuotaClassificationEnabled(process.env)
+        ? classifyOpenCodeLimitError(`${fallbackErrorMessage}\n${attempt.proc.stderr}\n${attempt.proc.stdout.slice(-8_000)}`)
+        : null;
 
       return {
         exitCode: synthesizedExitCode,
@@ -719,7 +725,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         // Forward the transport-level error code from the run-disposition seam.
         // A lost duplex control channel surfaces the typed `duplex_channel_lost`
         // code; every other result carries no code here.
-        errorCode: attempt.proc.errorCode ?? null,
+        errorCode: attempt.proc.errorCode ?? (limit?.errorFamily === "provider_quota" ? "provider_quota" : null),
         usage: {
           inputTokens: attempt.parsed.usage.inputTokens,
           outputTokens: attempt.parsed.usage.outputTokens,
@@ -736,6 +742,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         resultJson: {
           stdout: attempt.proc.stdout,
           stderr: attempt.proc.stderr,
+          ...(limit ? { errorFamily: limit.errorFamily } : {}),
+          ...(limit?.retryNotBefore ? { retryNotBefore: limit.retryNotBefore.toISOString() } : {}),
         },
         summary: attempt.parsed.summary,
         clearSession: Boolean(clearSessionOnMissingSession && !attempt.parsed.sessionId),
