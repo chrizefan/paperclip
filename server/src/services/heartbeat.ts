@@ -394,6 +394,7 @@ import {
   evaluateIssueRewakeThrottle,
   isThrottleCandidateIssueRewake,
 } from "./issue-rewake-throttle.js";
+import { ISSUE_WAKE_CAP_WINDOW_MS, resolveIssueWakeCapPerDay, shouldSkipWakeForIssueCap } from "./issue-wake-cap.js";
 import {
   logActivity,
   publishPluginDomainEvent,
@@ -28730,6 +28731,41 @@ export function heartbeatService(
                 });
                 return { kind: "skipped" as const };
               }
+            }
+          }
+
+          // Per-issue daily wake cap (opt-in via PAPERCLIP_ISSUE_WAKE_CAP_PER_DAY).
+          const issueWakeCap = resolveIssueWakeCapPerDay();
+          if (issueWakeCap > 0 && opts.requestedByActorType !== "user") {
+            const capNow = new Date();
+            const [capRow] = await tx
+              .select({ count: sql<number>`count(*)::int` })
+              .from(heartbeatRuns)
+              .where(
+                and(
+                  eq(heartbeatRuns.companyId, agent.companyId),
+                  eq(heartbeatRuns.agentId, agentId),
+                  gte(heartbeatRuns.createdAt, new Date(capNow.getTime() - ISSUE_WAKE_CAP_WINDOW_MS)),
+                  sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+                ),
+              );
+            const runsInWindow = Number(capRow?.count ?? 0);
+            if (shouldSkipWakeForIssueCap({ capPerDay: issueWakeCap, runsInWindow, requestedByActorType: opts.requestedByActorType ?? null })) {
+              await tx.insert(agentWakeupRequests).values({
+                ...durableReceiptFields,
+                companyId: agent.companyId,
+                agentId,
+                source,
+                triggerDetail,
+                reason: "issue_wake_cap_reached",
+                payload: { ...(payload ?? {}), issueId, heartbeatSkip: { reason: "issue_wake_cap_reached", capPerDay: issueWakeCap, runsInWindow, requestedReason: reason } },
+                status: "skipped",
+                requestedByActorType: opts.requestedByActorType ?? null,
+                requestedByActorId: opts.requestedByActorId ?? null,
+                idempotencyKey: opts.idempotencyKey ?? null,
+                finishedAt: capNow,
+              });
+              return { kind: "skipped" as const };
             }
           }
 
